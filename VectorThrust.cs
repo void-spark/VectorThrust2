@@ -271,216 +271,18 @@ public long updateNacellesCount;
 
 public void Main(string argument, UpdateType runType) {
 
-
-	// ========== STARTUP ==========
-	globalAppend = false;
-
-	programCounter++;
-	Echo($"Last Runtime {Runtime.LastRunTimeMs.Round(2)}ms");
-	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs.Round(0)}ms");
-
-	// only accept arguments on certain update types
-	UpdateType valid_argument_updates = UpdateType.None;
-	valid_argument_updates |= UpdateType.Terminal;
-	valid_argument_updates |= UpdateType.Trigger;
-	valid_argument_updates |= UpdateType.Script;
-	if((runType & valid_argument_updates) == UpdateType.None) {
-		// runtype is not one that is allowed to give arguments
-		argument = "";
-	}
-	Echo($"Greedy: {this.greedy}");
-
-	argument = argument.ToLower();
-	bool togglePower = argument.Contains(standbytogArg.ToLower());
-
-	bool anyArg = false;
-	foreach(string arg in allArgs) {
-		anyArg |= argument.Contains(arg.ToLower());
-	}
-
-	// set standby mode on
-	if(argument.Contains(standbyonArg.ToLower()) || goToStandby) {
-		enterStandby();
-	        return;
-	// set standby mode off
-	} else if(argument.Contains(standbyoffArg.ToLower()) || comeFromStandby) {
-		exitStandby();
-		return;
-	// going into standby mode toggle
-	} else if((togglePower && !standby) || goToStandby) {
-		enterStandby();
-		return;
-	// coming back from standby mode toggle
-	} else if((anyArg || runType == UpdateType.Terminal) && standby || comeFromStandby) {
-		exitStandby();
-	} else {
-		Echo("Normal Running");
-	}
-
-	if(justCompiled || controllers.Count == 0 || argument.Contains(resetArg.ToLower())) {
-		if(!init()) {
-			return;
-		}
-	}
-
-
-
-	//tags and getting blocks
-	this.applyTags = argument.Contains(Program.applyTagsArg.ToLower());
-	this.removeTags = !this.applyTags && argument.Contains(Program.removeTagsArg.ToLower());
-	// switch on: removeTags
-	// switch off: applyTags
-	this.greedy = (!this.applyTags && this.greedy) || this.removeTags;
-	// this automatically calls getNacelles() as needed, and passes in previous GTS data
-	if(this.applyTags) {
-		addTag(Me);
-	} else if(this.removeTags) {
-		removeTag(Me);
-	}
-	if(!checkNacelles()) {
-		Echo("Setup failed, stopping.");
-		return;
-	}
-	this.applyTags = false;
-	this.removeTags = false;
-
-
-
-
-	if(justCompiled) {
-		justCompiled = false;
-		Runtime.UpdateFrequency = UpdateFrequency.Once;
-		if(Storage == "" || !startInStandby) {
-			Storage = "Don't Start Automatically";
-			// run normally
-			comeFromStandby = true;
-			return;
-		} else {
-
-			// go into standby mode
-			goToStandby = true;
-			return;
-		}
-	}
-
-	if(standby) {
-		Echo("Standing By");
-		write("Standing By");
+	if(!doStartup(argument, runType)) {
 		return;
 	}
 
-	// ========== END OF STARTUP ==========
-
-
-
-
-
-
-
-
-
-
-	// ========== PHYSICS ==========
-
- 	// get gravity in world space
-	Vector3D worldGrav = usableControllers[0].theBlock.GetNaturalGravity();
-
-	// get velocity
-	MyShipVelocities shipVelocities = usableControllers[0].theBlock.GetShipVelocities();
-	shipVelocity = shipVelocities.LinearVelocity;
-	// Vector3D shipAngularVelocity = shipVelocities.AngularVelocity;
-
-	// setup mass
-	MyShipMass myShipMass = usableControllers[0].theBlock.CalculateShipMass();
-	float shipMass = myShipMass.PhysicalMass;
-
-	if(myShipMass.BaseMass < 0.001f) {
-		Echo("Can't fly a Station");
-		shipMass = 0.001f;
-	}
-
-	// setup gravity
-	float gravLength = (float)worldGrav.Length();
-	if(gravLength < gravCutoff) {
-		gravLength = zeroGAcceleration;
-		thrustModifierAbove = thrustModifierAboveSpace;
-		thrustModifierBelow = thrustModifierBelowSpace;
-	}
-	else {
-		thrustModifierAbove = thrustModifierAboveGrav;
-		thrustModifierBelow = thrustModifierBelowGrav;
-	}
 
 	Vector3D desiredVec = getMovementInput(argument);
 
-	// f=ma
-	Vector3D shipWeight = shipMass * worldGrav;
+	float shipMass;
+	float gravLength;
+	Vector3D requiredVec;
 
-
-
-	if(dampeners) {
-		Vector3D dampVec = Vector3D.Zero;
-
-
-		if(desiredVec != Vector3D.Zero) {
-			// cancel movement opposite to desired movement direction
-			if(desiredVec.dot(shipVelocity) < 0) {
-				//if you want to go oppisite to velocity
-				dampVec += shipVelocity.project(desiredVec.normalized());
-			}
-			// cancel sideways movement
-			dampVec += shipVelocity.reject(desiredVec.normalized());
-		} else {
-			dampVec += shipVelocity;
-		}
-
-
-
-		if(cruise) {
-
-			foreach(ShipController cont in usableControllers) {
-				if(onlyMain() && cont != mainController) continue;
-				if(!cont.theBlock.IsUnderControl) continue;
-
-
-				if(dampVec.dot(cont.theBlock.WorldMatrix.Forward) > 0 || cruisePlane) { // only front, or front+back if cruisePlane is activated
-					dampVec -= dampVec.project(cont.theBlock.WorldMatrix.Forward);
-				}
-
-				if(cruisePlane) {
-					shipWeight -= shipWeight.project(cont.theBlock.WorldMatrix.Forward);
-				}
-			}
-		}
-
-
-		desiredVec -= dampVec * dampenersModifier;
-	}
-
-
-
-	// f=ma
-	desiredVec *= shipMass * (float)getAcceleration(gravLength);
-
-	// point thrust in opposite direction, add weight. this is force, not acceleration
-	Vector3D requiredVec = -desiredVec + shipWeight;
-
-	// remove thrust done by normal thrusters
-	for(int i = 0; i < normalThrusters.Count; i++) {
-		requiredVec -= -1 * normalThrusters[i].WorldMatrix.Backward * normalThrusters[i].CurrentThrust;
-		// Echo($"{normalThrusters[i].CustomName}: {Vector3D.TransformNormal(normalThrusters[i].CurrentThrust * normalThrusters[i].WorldMatrix.Backward, MatrixD.Invert(normalThrusters[i].WorldMatrix))}");
-		// write($"{normalThrusters[i].CustomName}: \n{Vector3D.TransformNormal(normalThrusters[i].CurrentThrust * normalThrusters[i].WorldMatrix.Backward, MatrixD.Invert(normalThrusters[i].WorldMatrix))}");
-	}
-
-	Echo("Required Force: " + $"{Math.Round(requiredVec.Length(),0)}" + "N");
-
-	// ========== END OF PHYSICS ==========
-
-
-
-
-
-
+	doPhysics(desiredVec, out shipMass, out gravLength, out requiredVec);
 
 
 
@@ -652,10 +454,191 @@ public bool thrustOn = false;
 
 public Dictionary<string, object> CMinputs = null;
 
+public bool doStartup(string argument, UpdateType runType) {
+	globalAppend = false;
+
+	programCounter++;
+	Echo($"Last Runtime {Runtime.LastRunTimeMs.Round(2)}ms");
+	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs.Round(0)}ms");
+
+	// only accept arguments on certain update types
+	UpdateType valid_argument_updates = UpdateType.None;
+	valid_argument_updates |= UpdateType.Terminal;
+	valid_argument_updates |= UpdateType.Trigger;
+	valid_argument_updates |= UpdateType.Script;
+	if((runType & valid_argument_updates) == UpdateType.None) {
+		// runtype is not one that is allowed to give arguments
+		argument = "";
+	}
+	Echo($"Greedy: {this.greedy}");
+
+	argument = argument.ToLower();
+
+	bool anyArg = Array.Exists(allArgs, arg => isArg(argument, arg));
+
+	if(isArg(argument, standbyonArg) || 
+	   (isArg(argument, standbytogArg) && !standby) ||
+	   goToStandby) {
+		enterStandby();
+		return false;
+	} else if(isArg(argument, standbyoffArg) ||
+	          ((anyArg || runType == UpdateType.Terminal) && standby) ||
+	          comeFromStandby) {
+		exitStandby();
+	} else {
+		Echo("Normal Running");
+	}
+
+	if(justCompiled || controllers.Count == 0 || isArg(argument, resetArg)) {
+		if(!init()) {
+			return false;
+		}
+	}
+
+
+
+	//tags and getting blocks
+	this.applyTags = isArg(argument, applyTagsArg);
+	this.removeTags = !this.applyTags && isArg(argument, removeTagsArg);
+	// switch on: removeTags
+	// switch off: applyTags
+	this.greedy = (!this.applyTags && this.greedy) || this.removeTags;
+	// this automatically calls getNacelles() as needed, and passes in previous GTS data
+	if(this.applyTags) {
+		addTag(Me);
+	} else if(this.removeTags) {
+		removeTag(Me);
+	}
+	if(!checkNacelles()) {
+		Echo("Setup failed, stopping.");
+		return false;
+	}
+	this.applyTags = false;
+	this.removeTags = false;
 
 
 
 
+	if(justCompiled) {
+		justCompiled = false;
+		Runtime.UpdateFrequency = UpdateFrequency.Once;
+		if(Storage == "" || !startInStandby) {
+			Storage = "Don't Start Automatically";
+			// run normally
+			comeFromStandby = true;
+			return false;
+		} else {
+			// go into standby mode
+			goToStandby = true;
+			return false;
+		}
+	}
+
+	if(standby) {
+		Echo("Standing By");
+		write("Standing By");
+		return false;
+	}
+
+	return true;
+}
+
+public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLength, out Vector3D requiredVec) {
+
+ 	// get gravity in world space
+	Vector3D worldGrav = usableControllers[0].theBlock.GetNaturalGravity();
+
+	// get velocity
+	MyShipVelocities shipVelocities = usableControllers[0].theBlock.GetShipVelocities();
+	shipVelocity = shipVelocities.LinearVelocity;
+	// Vector3D shipAngularVelocity = shipVelocities.AngularVelocity;
+
+	// setup mass
+	MyShipMass myShipMass = usableControllers[0].theBlock.CalculateShipMass();
+	shipMass = myShipMass.PhysicalMass;
+
+	if(myShipMass.BaseMass < 0.001f) {
+		Echo("Can't fly a Station");
+		shipMass = 0.001f;
+	}
+
+	// setup gravity
+	gravLength = (float)worldGrav.Length();
+	if(gravLength < gravCutoff) {
+		gravLength = zeroGAcceleration;
+		thrustModifierAbove = thrustModifierAboveSpace;
+		thrustModifierBelow = thrustModifierBelowSpace;
+	}
+	else {
+		thrustModifierAbove = thrustModifierAboveGrav;
+		thrustModifierBelow = thrustModifierBelowGrav;
+	}
+
+	// f=ma
+	Vector3D shipWeight = shipMass * worldGrav;
+
+
+
+	if(dampeners) {
+		Vector3D dampVec = Vector3D.Zero;
+
+
+		if(desiredVec != Vector3D.Zero) {
+			// cancel movement opposite to desired movement direction
+			if(desiredVec.dot(shipVelocity) < 0) {
+				//if you want to go oppisite to velocity
+				dampVec += shipVelocity.project(desiredVec.normalized());
+			}
+			// cancel sideways movement
+			dampVec += shipVelocity.reject(desiredVec.normalized());
+		} else {
+			dampVec += shipVelocity;
+		}
+
+
+
+		if(cruise) {
+
+			foreach(ShipController cont in usableControllers) {
+				if(onlyMain() && cont != mainController) continue;
+				if(!cont.theBlock.IsUnderControl) continue;
+
+
+				if(dampVec.dot(cont.theBlock.WorldMatrix.Forward) > 0 || cruisePlane) { // only front, or front+back if cruisePlane is activated
+					dampVec -= dampVec.project(cont.theBlock.WorldMatrix.Forward);
+				}
+
+				if(cruisePlane) {
+					shipWeight -= shipWeight.project(cont.theBlock.WorldMatrix.Forward);
+				}
+			}
+		}
+
+
+		desiredVec -= dampVec * dampenersModifier;
+	}
+
+
+
+	// f=ma
+	desiredVec *= shipMass * (float)getAcceleration(gravLength);
+
+	// point thrust in opposite direction, add weight. this is force, not acceleration
+	requiredVec = -desiredVec + shipWeight;
+
+	// remove thrust done by normal thrusters
+	for(int i = 0; i < normalThrusters.Count; i++) {
+		requiredVec -= -1 * normalThrusters[i].WorldMatrix.Backward * normalThrusters[i].CurrentThrust;
+		// Echo($"{normalThrusters[i].CustomName}: {Vector3D.TransformNormal(normalThrusters[i].CurrentThrust * normalThrusters[i].WorldMatrix.Backward, MatrixD.Invert(normalThrusters[i].WorldMatrix))}");
+		// write($"{normalThrusters[i].CustomName}: \n{Vector3D.TransformNormal(normalThrusters[i].CurrentThrust * normalThrusters[i].WorldMatrix.Backward, MatrixD.Invert(normalThrusters[i].WorldMatrix))}");
+	}
+
+	Echo("Required Force: " + $"{Math.Round(requiredVec.Length(),0)}" + "N");
+}
+
+public bool isArg(string argument, string toCheck) {
+	return argument.Contains(toCheck.ToLower());
+}
 
 public void enterStandby() {
 	standby = true;
@@ -708,6 +691,8 @@ public void exitStandby() {
 	activeTag(Me);
 
 	Runtime.UpdateFrequency = update_frequency;
+
+	Echo("Resuming from standby");
 }
 
 public bool hasTag(IMyTerminalBlock block) {
@@ -888,23 +873,23 @@ public Vector3D getMovementInput(string arg) {
 	}
 
 	bool changeDampeners = false;
-	if(arg.Contains(dampenersArg.ToLower())) {
+	if(isArg(arg, dampenersArg)) {
 		dampeners = !dampeners;
 		changeDampeners	= true;
 	}
-	if(arg.Contains(cruiseArg.ToLower())) {
+	if(isArg(arg, cruiseArg)) {
 		cruise = !cruise;
 	}
-	if(arg.Contains(jetpackArg.ToLower())) {
+	if(isArg(arg, jetpackArg)) {
 		jetpack = !jetpack;
 	}
-	if(arg.Contains(raiseAccelArg.ToLower())) {
+	if(isArg(arg, raiseAccelArg)) {
 		accelExponent++;
 	}
-	if(arg.Contains(lowerAccelArg.ToLower())) {
+	if(isArg(arg, lowerAccelArg)) {
 		accelExponent--;
 	}
-	if(arg.Contains(resetAccelArg.ToLower())) {
+	if(isArg(arg, resetAccelArg)) {
 		accelExponent = 0;
 	}
 
@@ -1332,7 +1317,7 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 
 		// it's not set to not be a nacelle rotor
 		// it's topgrid is not the programmable blocks grid
-		Rotor rotor = new Rotor(current, this);
+		Rotor rotor = new Rotor(current, this.maxRotorRPM);
 		this.nacelles.Add(new Nacelle(rotor, this));
 	}
 
@@ -1366,36 +1351,6 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 		this.nacelles[i].detectThrustDirection();
 	}
 
-}
-
-public float lerp(float a, float b, float cutoff) {
-	float percent = a/b;
-	percent -= cutoff;
-	percent *= 1/(1-cutoff);
-	if(percent > 1) {
-		percent = 1;
-	}
-	if(percent < 0) {
-		percent = 0;
-	}
-	return percent;
-}
-
-void displayNacelles(List<Nacelle> nacelles) {
-	foreach(Nacelle n in nacelles) {
-		Echo($"\nRotor Name: {n.rotor.theBlock.CustomName}");
-		// n.rotor.theBlock.SafetyLock = false;//for testing
-		// n.rotor.theBlock.SafetyLockSpeed = 100;//for testing
-
-		// Echo($@"deltaX: {Vector3D.Round(oldTranslation - km.Translation.Translation, 0)}");
-
-		Echo("Thrusters:");
-		int i = 0;
-		foreach(Thruster t in n.thrusters) {
-			Echo($@"{i}: {t.theBlock.CustomName}");
-			i++;
-		}
-	}
 }
 
 public class Nacelle {
@@ -1687,19 +1642,16 @@ public class Rotor : BlockWrapper<IMyMotorStator> {
 	// Depreciated, this is for the old setFromVec
 	public float offset = 0;// radians
 
-	public Program program;
 	public Vector3D direction = Vector3D.Zero;//offset relative to the head
 
 	public string errStr = "";
 	float maxRPM;
 
-	public Rotor(IMyMotorStator rotor, Program program) : base(rotor) {
-		this.program = program;
-
-		if(program.maxRotorRPM <= 0) {
+	public Rotor(IMyMotorStator rotor, float maxRotorRPM) : base(rotor) {
+		if(maxRotorRPM <= 0) {
 			maxRPM = rotor.GetMaximum<float>("Velocity");
 		} else {
-			maxRPM = program.maxRotorRPM;
+			maxRPM = maxRotorRPM;
 		}
 	}
 
@@ -1849,41 +1801,22 @@ public class Rotor : BlockWrapper<IMyMotorStator> {
 	}
 
 }
-public class ShipController : BlockWrapper<IMyShipController> {
-	public bool lastDampener;
 
+public class ShipController : BlockWrapper<IMyShipController> {
 
 	public ShipController(IMyShipController theBlock) : base(theBlock) {
-		lastDampener = theBlock.DampenersOverride;
 	}
 
 	public void setDampener(bool val) {
-		lastDampener = val;
 		theBlock.DampenersOverride = val;
 	}
-
 }
 
-public interface IBlockWrapper
-{
-    IMyTerminalBlock theBlock { get; set; }
-}
-
-public abstract class BlockWrapper<T>: IBlockWrapper where T: class, IMyTerminalBlock
-{
+public abstract class BlockWrapper<T> where T: class, IMyTerminalBlock {
     public T theBlock { get; set; }
 
     public BlockWrapper(T block) {
     	theBlock = block;
-    }
-
-    // not allowed for some reason
-    //public static implicit operator IMyTerminalBlock(BlockWrapper<T> wrap) => wrap.theBlock;
-
-    IMyTerminalBlock IBlockWrapper.theBlock
-    {
-        get { return theBlock; }
-        set { theBlock = (T)value; }
     }
 }
 
@@ -1891,10 +1824,6 @@ public abstract class BlockWrapper<T>: IBlockWrapper where T: class, IMyTerminal
 
 }
 public static class CustomProgramExtensions {
-
-	public static bool IsAlive(this IMyTerminalBlock block) {
-		return block.CubeGrid.GetCubeBlock(block.Position)?.FatBlock == block;
-	}
 
 	// projects a onto b
 	public static Vector3D project(this Vector3D a, Vector3D b) {
@@ -1944,7 +1873,6 @@ public static class CustomProgramExtensions {
 		return val.Length().progressBar();
 	}
 
-
 	public static Vector3D Round(this Vector3D vec, int num) {
 		return Vector3D.Round(vec, num);
 	}
@@ -1969,8 +1897,5 @@ public static class CustomProgramExtensions {
 	}
 
 	public static String toString(this bool val) {
-		if(val) {
-			return "true";
-		}
-		return "false";
+		return val ? "true" : "false";
 	}
