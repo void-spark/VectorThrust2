@@ -95,6 +95,21 @@ public const string resetArg = "%reset";//this one re-runs the initial setup... 
 public const string applyTagsArg = "%applyTags";
 public const string removeTagsArg = "%removeTags";
 
+public string[] allArgs = {
+	standbytogArg,
+	standbyonArg,
+	standbyoffArg,
+	dampenersArg,
+	cruiseArg,
+	jetpackArg,
+	raiseAccelArg,
+	lowerAccelArg,
+	resetAccelArg,
+	resetArg,
+	applyTagsArg,
+	removeTagsArg
+};
+
 // control module gamepad bindings
 // type "/cm showinputs" into chat
 // press the desired button
@@ -246,8 +261,8 @@ public Program() {
 		Me.CustomData = textSurfaceKeyword + 0;
 	}
 }
-public void Save() {}
 
+public void Save() {}
 
 //at 60 fps this will last for 9000+ hrs before going negative
 public long programCounter;
@@ -257,69 +272,31 @@ public long updateNacellesCount;
 public void Main(string argument, UpdateType runType) {
 
 
-
-
-
-
-
-
-
-
 	// ========== STARTUP ==========
 	globalAppend = false;
 
 	programCounter++;
 	Echo($"Last Runtime {Runtime.LastRunTimeMs.Round(2)}ms");
-	String spinner = "";
-	switch(programCounter/10%4) {
-		case 0:
-			spinner = "|";
-		break;
-		case 1:
-			spinner = "\\";
-		break;
-		case 2:
-			spinner = "-";
-		break;
-		case 3:
-			spinner = "/";
-		break;
-	}
-	write($"{spinner} {Runtime.LastRunTimeMs.Round(0)}ms");
-
+	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs.Round(0)}ms");
 
 	// only accept arguments on certain update types
 	UpdateType valid_argument_updates = UpdateType.None;
 	valid_argument_updates |= UpdateType.Terminal;
 	valid_argument_updates |= UpdateType.Trigger;
-	// valid_argument_updates |= UpdateType.Mod;
 	valid_argument_updates |= UpdateType.Script;
-	// valid_argument_updates |= UpdateType.Update1;
-	// valid_argument_updates |= UpdateType.Update10;
-	// valid_argument_updates |= UpdateType.Update100;
 	if((runType & valid_argument_updates) == UpdateType.None) {
 		// runtype is not one that is allowed to give arguments
 		argument = "";
 	}
-	Echo("Greedy: " + this.greedy);
+	Echo($"Greedy: {this.greedy}");
 
-	// Echo("Starting Main");
 	argument = argument.ToLower();
 	bool togglePower = argument.Contains(standbytogArg.ToLower());
 
-	bool anyArg =
-	argument.Contains(dampenersArg.ToLower()) ||
-	argument.Contains(cruiseArg.ToLower()) ||
-	argument.Contains(jetpackArg.ToLower()) ||
-	argument.Contains(standbytogArg.ToLower()) ||
-	argument.Contains(standbyonArg.ToLower()) ||
-	argument.Contains(standbyoffArg.ToLower()) ||
-	argument.Contains(raiseAccelArg.ToLower()) ||
-	argument.Contains(lowerAccelArg.ToLower()) ||
-	argument.Contains(resetAccelArg.ToLower()) ||
-	argument.Contains(resetArg.ToLower()) ||
-	argument.Contains(applyTagsArg.ToLower()) ||
-	argument.Contains(removeTagsArg.ToLower());
+	bool anyArg = false;
+	foreach(string arg in allArgs) {
+		anyArg |= argument.Contains(arg.ToLower());
+	}
 
 	// set standby mode on
 	if(argument.Contains(standbyonArg.ToLower()) || goToStandby) {
