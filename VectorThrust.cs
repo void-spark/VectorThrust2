@@ -276,28 +276,30 @@ public void Main(string argument, UpdateType runType) {
 	}
 
 	// Get a vector indicating where we want to go, in world space.
-	// For each key press a vector length 1 is added in the respective direction, analog controllers are analog and might have a bigger value.
+	// For each key held a vector length 1 is added in the respective direction, analog controllers are analog and might have a bigger value.
 	Vector3D desiredVec = getMovementInput(argument);
 
+
+	Vector3D shipVelocity;
 	float shipMass;
 	float gravLength;
-	Vector3D requiredVec;
-
-	doPhysics(desiredVec, out shipMass, out gravLength, out requiredVec);
+	Vector3D requiredThrustVec;
+ 
+	doPhysics(desiredVec, out shipVelocity, out shipMass, out gravLength, out requiredThrustVec);
 
 
 
 	// ========== DISTRIBUTE THE FORCE EVENLY BETWEEN NACELLES ==========
 
 	// hysteresis
-	if(requiredVec.Length() > lowThrustCutOn * gravCutoff * shipMass) {//TODO: this causes problems if there are many small nacelles
+	if(requiredThrustVec.Length() > lowThrustCutOn * gravCutoff * shipMass) {//TODO: this causes problems if there are many small nacelles
 		thrustOn = true;
 	}
-	if(requiredVec.Length() < lowThrustCutOff * gravCutoff * shipMass) {
+	if(requiredThrustVec.Length() < lowThrustCutOff * gravCutoff * shipMass) {
 		thrustOn = false;
 	}
 
-	//Echo($"thrustOn: {thrustOn} \n{Math.Round(requiredVec.Length()/(gravCutoff*shipMass), 2)}\n{Math.Round(requiredVec.Length()/(gravCutoff*shipMass*0.01), 2)}");
+	//Echo($"thrustOn: {thrustOn} \n{Math.Round(requiredThrustVec.Length()/(gravCutoff*shipMass), 2)}\n{Math.Round(requiredThrustVec.Length()/(gravCutoff*shipMass*0.01), 2)}");
 
 	// maybe lerp this in the future
 	if(!thrustOn) {// Zero G
@@ -309,9 +311,9 @@ public void Main(string argument, UpdateType runType) {
 			zero_G_accel = (usableControllers[0].WorldMatrix.Down + usableControllers[0].WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
 		}
 		if(dampeners) {
-			requiredVec = zero_G_accel * shipMass + requiredVec;
+			requiredThrustVec = zero_G_accel * shipMass + requiredThrustVec;
 		} else {
-			requiredVec = (requiredVec - shipVelocity) + zero_G_accel;
+			requiredThrustVec = (requiredThrustVec - shipVelocity) + zero_G_accel;
 		}
 	}
 
@@ -350,27 +352,27 @@ public void Main(string argument, UpdateType runType) {
 	Vector3D asdf = Vector3D.Zero;
 	// 1
 	foreach(List<Nacelle> g in nacelleGroups) {
-		g[0].requiredVec = requiredVec.reject(g[0].rotor.theBlock.WorldMatrix.Up);
-		asdf += g[0].requiredVec;
+		g[0].requiredThrustVec = requiredThrustVec.reject(g[0].rotor.theBlock.WorldMatrix.Up);
+		asdf += g[0].requiredThrustVec;
 	}
 	// 2
-	asdf -= requiredVec;
+	asdf -= requiredThrustVec;
 	// 3
 	foreach(List<Nacelle> g in nacelleGroups) {
-		g[0].requiredVec -= asdf;
+		g[0].requiredThrustVec -= asdf;
 	}
 	// 4
 	asdf /= nacelleGroups.Count;
 	// 5
 	foreach(List<Nacelle> g in nacelleGroups) {
-		g[0].requiredVec += asdf;
+		g[0].requiredThrustVec += asdf;
 	}
 	// apply first nacelle settings to rest in each group
 	double total = 0;
 	foreach(List<Nacelle> g in nacelleGroups) {
-		Vector3D req = g[0].requiredVec / g.Count;
+		Vector3D req = g[0].requiredThrustVec / g.Count;
 		for(int i = 0; i < g.Count; i++) {
-			g[i].requiredVec = req;
+			g[i].requiredThrustVec = req;
 			g[i].thrustModifierAbove = thrustModifierAbove;
 			g[i].thrustModifierBelow = thrustModifierBelow;
 			// Echo(g[i].errStr);
@@ -436,7 +438,6 @@ public int programBlockCount = 0;
 
 
 public bool standby = startInStandby;
-public Vector3D shipVelocity = Vector3D.Zero;
 public double thrustModifierAbove = 0.1;// how close the rotor has to be to target position before the thruster gets to full power
 public double thrustModifierBelow = 0.1;// how close the rotor has to be to opposite of target position before the thruster gets to 0 power
 
@@ -544,17 +545,15 @@ public bool doStartup(string argument, UpdateType runType) {
 	return true;
 }
 
-public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLength, out Vector3D requiredVec) {
+public void doPhysics(Vector3D desiredVec, out Vector3D shipVelocity, out float shipMass, out float gravLength, out Vector3D requiredThrustVec) {
 
- 	// get gravity in world space
+ 	// Get gravity in world space
 	Vector3D worldGrav = usableControllers[0].GetNaturalGravity();
 
-	// get velocity
-	MyShipVelocities shipVelocities = usableControllers[0].GetShipVelocities();
-	shipVelocity = shipVelocities.LinearVelocity;
-	// Vector3D shipAngularVelocity = shipVelocities.AngularVelocity;
+	// Get velocity
+	shipVelocity = usableControllers[0].GetShipVelocities().LinearVelocity;
 
-	// setup mass
+	// Setup mass
 	MyShipMass myShipMass = usableControllers[0].CalculateShipMass();
 	shipMass = myShipMass.PhysicalMass;
 
@@ -569,16 +568,12 @@ public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLen
 		gravLength = zeroGAcceleration;
 		thrustModifierAbove = thrustModifierAboveSpace;
 		thrustModifierBelow = thrustModifierBelowSpace;
-	}
-	else {
+	} else {
 		thrustModifierAbove = thrustModifierAboveGrav;
 		thrustModifierBelow = thrustModifierBelowGrav;
 	}
 
-	// f=ma
-	Vector3D shipWeight = shipMass * worldGrav;
-
-
+	Vector3D shipWeightForce = shipMass * worldGrav;
 
 	if(dampeners) {
 		Vector3D dampVec = Vector3D.Zero;
@@ -597,7 +592,6 @@ public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLen
 		}
 
 
-
 		if(cruise) {
 
 			foreach(IMyShipController cont in usableControllers) {
@@ -610,31 +604,35 @@ public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLen
 				}
 
 				if(cruisePlane) {
-					shipWeight -= shipWeight.project(cont.WorldMatrix.Forward);
+					// Remove the ship forward/backward component of the force our weight excerts, so that we don't compensate it.
+					// This results in us moving forward with nose down, and backwards with nose up.
+					shipWeightForce -= shipWeightForce.project(cont.WorldMatrix.Forward);
 				}
 			}
 		}
 
-
 		desiredVec -= dampVec * dampenersModifier;
 	}
-
 
 
 	// f=ma
 	desiredVec *= shipMass * (float)getAcceleration(gravLength);
 
 	// point thrust in opposite direction, add weight. this is force, not acceleration
-	requiredVec = -desiredVec + shipWeight;
+	requiredThrustVec = -desiredVec + shipWeightForce;
 
-	// remove thrust done by normal thrusters
-	for(int i = 0; i < normalThrusters.Count; i++) {
-		requiredVec -= -1 * normalThrusters[i].WorldMatrix.Backward * normalThrusters[i].CurrentThrust;
-		// Echo($"{normalThrusters[i].CustomName}: {Vector3D.TransformNormal(normalThrusters[i].CurrentThrust * normalThrusters[i].WorldMatrix.Backward, MatrixD.Invert(normalThrusters[i].WorldMatrix))}");
-		// write($"{normalThrusters[i].CustomName}: \n{Vector3D.TransformNormal(normalThrusters[i].CurrentThrust * normalThrusters[i].WorldMatrix.Backward, MatrixD.Invert(normalThrusters[i].WorldMatrix))}");
+	// Remove thrust done by normal thrusters, note that thrust points to Forward, so adding Backward has the same effect as subtracting.
+	foreach(IMyThrust normalThruster in normalThrusters) {
+		requiredThrustVec += normalThruster.WorldMatrix.Backward * normalThruster.CurrentThrust;
 	}
 
-	Echo("Required Force: " + $"{Math.Round(requiredVec.Length(),0)}" + "N");
+	Echo("Required Force: " + $"{Math.Round(requiredThrustVec.Length(),0)}" + "N");
+}
+
+// Pretty print the given world space vector in ship space.
+public String formatVec(Vector3D vec, IMyEntity entity) {
+	Vector3D vecInEntitySpace = Vector3D.TransformNormal(vec, MatrixD.Invert(entity.WorldMatrix));
+	return $"X:{vecInEntitySpace.X,11:N2} Y:{vecInEntitySpace.Y,11:N2} Z:{vecInEntitySpace.Z,11:N2}";
 }
 
 public bool isArg(string argument, string toCheck) {
@@ -794,17 +792,10 @@ public void write(string str) {
 }
 
 double getAcceleration(double gravity) {
-	// look through boosts, applies acceleration of first one found
-	if(Program.useBoosts && this.controlModule) {
-		for(int i = 0; i < this.boosts.Length; i++) {
-			if(this.CMinputs.ContainsKey(this.boosts[i].button)) {
-				return this.boosts[i].accel * gravity * defaultAccel;
-			}
-		}
-	}
-
-	//none found or boosts not enabled, go for normal accel
-	return Math.Pow(accelBase, accelExponent) * gravity * defaultAccel;
+	// Look through boosts, applies acceleration of first one found. If none found or boosts not enabled, go for normal accel
+	int boostIndex = useBoosts && this.controlModule ? Array.FindIndex(this.boosts, boost => this.CMinputs.ContainsKey(boost.button)) : -1;
+	double accel = boostIndex != -1 ? this.boosts[boostIndex].accel : Math.Pow(accelBase, accelExponent);
+	return accel * gravity * defaultAccel;
 }
 
 public Vector3D getMovementInput(string arg) {
@@ -1360,7 +1351,7 @@ public class Nacelle {
 	public double thrustModifierBelow = 0.1;// how close the rotor has to be to opposite of target position before the thruster gets to 0 power
 
 	public bool oldJetpack = true;
-	public Vector3D requiredVec = Vector3D.Zero;
+	public Vector3D requiredThrustVec = Vector3D.Zero;
 
 	public float totalEffectiveThrust = 0;
 	public int detectThrustCounter = 0;
@@ -1384,10 +1375,10 @@ public class Nacelle {
 		errStr = "=======Nacelle=======";
 		/*errStr += $"\nactive thrusters: {activeThrusters.Count}";
 		errStr += $"\nall thrusters: {thrusters.Count}";
-		errStr += $"\nrequired force: {(int)requiredVec.Length()}N\n";*/
+		errStr += $"\nrequired force: {(int)requiredThrustVec.Length()}N\n";*/
 		totalEffectiveThrust = (float)calcTotalEffectiveThrust(activeThrusters);
 
-		double angleCos = rotor.setFromVec(requiredVec);
+		double angleCos = rotor.setFromVec(requiredThrustVec);
 		/*errStr += $"\n=======rotor=======";
 		errStr += $"\nname: '{rotor.theBlock.CustomName}'";
 		errStr += $"\n{rotor.errStr}";
@@ -1417,7 +1408,7 @@ public class Nacelle {
 		// errStr += $"\n=======thrusters=======";
 		foreach(Thruster thruster in activeThrusters) {
 			// errStr += thrustOffset.progressBar();
-			Vector3D thrust = thrustOffset * requiredVec * thruster.theBlock.MaxEffectiveThrust / totalEffectiveThrust;
+			Vector3D thrust = thrustOffset * requiredThrustVec * thruster.theBlock.MaxEffectiveThrust / totalEffectiveThrust;
 			bool noThrust = thrust.LengthSquared() < 0.001f;
 			if(!jetpack || !program.thrustOn || noThrust) {
 				thruster.setThrust(0);
@@ -1864,10 +1855,6 @@ public static class CustomProgramExtensions {
 
 	public static float Round(this float val, int num) {
 		return (float)Math.Round(val, num);
-	}
-
-	public static String toString(this Vector3D val) {
-		return $"X:{val.X,10:N2} Y:{val.Y,10:N2} Z:{val.Z,10:N2}";
 	}
 
 	public static String toString(this bool val) {
