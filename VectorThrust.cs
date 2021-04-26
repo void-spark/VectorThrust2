@@ -275,7 +275,8 @@ public void Main(string argument, UpdateType runType) {
 		return;
 	}
 
-
+	// Get a vector indicating where we want to go, in world space.
+	// For each key press a vector length 1 is added in the respective direction, analog controllers are analog and might have a bigger value.
 	Vector3D desiredVec = getMovementInput(argument);
 
 	float shipMass;
@@ -303,9 +304,9 @@ public void Main(string argument, UpdateType runType) {
 		//Echo("\nnot much thrust");
 		Vector3D zero_G_accel = Vector3D.Zero;
 		if(mainController != null) {
-			zero_G_accel = (mainController.theBlock.WorldMatrix.Down + mainController.theBlock.WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
+			zero_G_accel = (mainController.WorldMatrix.Down + mainController.WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
 		} else {
-			zero_G_accel = (usableControllers[0].theBlock.WorldMatrix.Down + usableControllers[0].theBlock.WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
+			zero_G_accel = (usableControllers[0].WorldMatrix.Down + usableControllers[0].WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
 		}
 		if(dampeners) {
 			requiredVec = zero_G_accel * shipMass + requiredVec;
@@ -415,9 +416,9 @@ public bool minusIsPressed = false;
 
 public bool globalAppend = false;
 
-public ShipController mainController = null;
-public List<ShipController> controllers = new List<ShipController>();
-public List<ShipController> usableControllers = new List<ShipController>();
+public IMyShipController mainController = null;
+public List<IMyShipController> controllers = new List<IMyShipController>();
+public List<IMyShipController> usableControllers = new List<IMyShipController>();
 public List<Nacelle> nacelles = new List<Nacelle>();
 public List<IMyThrust> normalThrusters = new List<IMyThrust>();
 public List<IMyTextPanel> screens = new List<IMyTextPanel>();
@@ -546,15 +547,15 @@ public bool doStartup(string argument, UpdateType runType) {
 public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLength, out Vector3D requiredVec) {
 
  	// get gravity in world space
-	Vector3D worldGrav = usableControllers[0].theBlock.GetNaturalGravity();
+	Vector3D worldGrav = usableControllers[0].GetNaturalGravity();
 
 	// get velocity
-	MyShipVelocities shipVelocities = usableControllers[0].theBlock.GetShipVelocities();
+	MyShipVelocities shipVelocities = usableControllers[0].GetShipVelocities();
 	shipVelocity = shipVelocities.LinearVelocity;
 	// Vector3D shipAngularVelocity = shipVelocities.AngularVelocity;
 
 	// setup mass
-	MyShipMass myShipMass = usableControllers[0].theBlock.CalculateShipMass();
+	MyShipMass myShipMass = usableControllers[0].CalculateShipMass();
 	shipMass = myShipMass.PhysicalMass;
 
 	if(myShipMass.BaseMass < 0.001f) {
@@ -599,17 +600,17 @@ public void doPhysics(Vector3D desiredVec, out float shipMass, out float gravLen
 
 		if(cruise) {
 
-			foreach(ShipController cont in usableControllers) {
+			foreach(IMyShipController cont in usableControllers) {
 				if(onlyMain() && cont != mainController) continue;
-				if(!cont.theBlock.IsUnderControl) continue;
+				if(!cont.IsUnderControl) continue;
 
 
-				if(dampVec.dot(cont.theBlock.WorldMatrix.Forward) > 0 || cruisePlane) { // only front, or front+back if cruisePlane is activated
-					dampVec -= dampVec.project(cont.theBlock.WorldMatrix.Forward);
+				if(dampVec.dot(cont.WorldMatrix.Forward) > 0 || cruisePlane) { // only front, or front+back if cruisePlane is activated
+					dampVec -= dampVec.project(cont.WorldMatrix.Forward);
 				}
 
 				if(cruisePlane) {
-					shipWeight -= shipWeight.project(cont.theBlock.WorldMatrix.Forward);
+					shipWeight -= shipWeight.project(cont.WorldMatrix.Forward);
 				}
 			}
 		}
@@ -656,8 +657,8 @@ public void enterStandby() {
 	foreach(IMyTextPanel screen in usableScreens) {
 		standbyTag(screen);
 	}
-	foreach(ShipController cont in usableControllers) {
-		standbyTag(cont.theBlock);
+	foreach(IMyShipController cont in usableControllers) {
+		standbyTag(cont);
 	}
 	standbyTag(Me);
 
@@ -685,8 +686,8 @@ public void exitStandby() {
 	foreach(IMyTextPanel screen in usableScreens) {
 		activeTag(screen);
 	}
-	foreach(ShipController cont in usableControllers) {
-		activeTag(cont.theBlock);
+	foreach(IMyShipController cont in usableControllers) {
+		activeTag(cont);
 	}
 	activeTag(Me);
 
@@ -744,7 +745,7 @@ public void activeTag(IMyTerminalBlock block) {
 // false: any cockpits can be used, but if there is someone in the main cockpit, it will only obey the main cockpit
 // no main cockpit: any cockpits can be used
 public bool onlyMain() {
-	return mainController != null && (mainController.theBlock.IsUnderControl || onlyMainCockpit);
+	return mainController != null && (mainController.IsUnderControl || onlyMainCockpit);
 }
 
 public void getScreens() {
@@ -807,8 +808,6 @@ double getAcceleration(double gravity) {
 }
 
 public Vector3D getMovementInput(string arg) {
-	Vector3D moveVec = Vector3D.Zero;
-
 	if(controlModule) {
 		// setup control module
 		Dictionary<string, object> inputs = new Dictionary<string, object>();
@@ -899,47 +898,48 @@ public Vector3D getMovementInput(string arg) {
 		if(onlyMain()) {
 
 			if(changeDampeners) {
-				mainController.theBlock.DampenersOverride = dampeners;
+				mainController.DampenersOverride = dampeners;
 			} else {
-				dampeners = mainController.theBlock.DampenersOverride;
+				dampeners = mainController.DampenersOverride;
 			}
 		} else {
 
 			if(changeDampeners) {
 				// make all conform
-				foreach(ShipController cont in usableControllers) {
-					cont.setDampener(dampeners);
+				foreach(IMyShipController cont in usableControllers) {
+					cont.DampenersOverride = dampeners;
 				}
 			} else {
 
 				// check if any are different to us
 				bool any_different = false;
-				foreach(ShipController cont in usableControllers) {
-					if(cont.theBlock.DampenersOverride != dampeners) {
+				foreach(IMyShipController cont in usableControllers) {
+					if(cont.DampenersOverride != dampeners) {
 						any_different = true;
-						dampeners = cont.theBlock.DampenersOverride;
+						dampeners = cont.DampenersOverride;
 						break;
 					}
 				}
 
 				if(any_different) {
 					// update all others to new value too
-					foreach(ShipController cont in usableControllers) {
-						cont.setDampener(dampeners);
+					foreach(IMyShipController cont in usableControllers) {
+						cont.DampenersOverride = dampeners;
 					}
 				}
 			}
 		}
 	}
 
-
-	// movement controls
+	// Movement controls
+	Vector3D moveVec;
 	if(onlyMain()) {
-		moveVec = mainController.theBlock.getWorldMoveIndicator();
+		moveVec = mainController.getWorldMoveIndicator();
 	} else {
-		foreach(ShipController cont in usableControllers) {
-			if(cont.theBlock.IsUnderControl) {
-				moveVec += cont.theBlock.getWorldMoveIndicator();
+		moveVec = Vector3D.Zero;
+		foreach(IMyShipController cont in usableControllers) {
+			if(cont.IsUnderControl) {
+				moveVec += cont.getWorldMoveIndicator();
 			}
 		}
 	}
@@ -1048,14 +1048,6 @@ bool getControllers() {
 }
 
 bool getControllers(List<IMyShipController> blocks) {
-	List<ShipController> conts = new List<ShipController>();
-	foreach(IMyShipController imy in blocks) {
-		conts.Add(new ShipController(imy));
-	}
-	return getControllers(conts);
-}
-
-bool getControllers(List<ShipController> blocks) {
 	bool greedy = this.greedy || this.applyTags || this.removeTags;
 	mainController = null;
 	this.controllers = blocks;
@@ -1065,38 +1057,38 @@ bool getControllers(List<ShipController> blocks) {
 	string reason = "";
 	for(int i = 0; i < blocks.Count; i++) {
 		bool canAdd = true;
-		string currreason = blocks[i].theBlock.CustomName + "\n";
-		if(!blocks[i].theBlock.ShowInTerminal && ignoreHiddenBlocks) {
+		string currreason = blocks[i].CustomName + "\n";
+		if(!blocks[i].ShowInTerminal && ignoreHiddenBlocks) {
 			currreason += "  ShowInTerminal not set\n";
 			canAdd = false;
 		}
-		if(!blocks[i].theBlock.CanControlShip) {
+		if(!blocks[i].CanControlShip) {
 			currreason += "  CanControlShip not set\n";
 			canAdd = false;
 		}
-		if(!blocks[i].theBlock.ControlThrusters) {
+		if(!blocks[i].ControlThrusters) {
 			currreason += "  can't ControlThrusters\n";
 			canAdd = false;
 		}
-		if(blocks[i].theBlock.IsMainCockpit) {
+		if(blocks[i].IsMainCockpit) {
 			mainController = blocks[i];
 		}
-		if(!(greedy || hasTag(blocks[i].theBlock))) {
+		if(!(greedy || hasTag(blocks[i]))) {
 			currreason += "  Doesn't match my tag\n";
 			canAdd = false;
 		}
 		if(this.removeTags) {
-			removeTag(blocks[i].theBlock);
+			removeTag(blocks[i]);
 		}
 
 		if(canAdd) {
-			addSurfaceProvider(blocks[i].theBlock);
+			addSurfaceProvider(blocks[i]);
 			usableControllers.Add(blocks[i]);
 			if(this.applyTags) {
-				addTag(blocks[i].theBlock);
+				addTag(blocks[i]);
 			}
 		} else {
-			removeSurfaceProvider(blocks[i].theBlock);
+			removeSurfaceProvider(blocks[i]);
 			reason += currreason;
 		}
 	}
@@ -1114,9 +1106,9 @@ bool getControllers(List<ShipController> blocks) {
 	return true;
 }
 
-public ShipController findACockpit() {
-	foreach(ShipController cont in usableControllers) {
-		if(cont.theBlock.IsWorking) {
+public IMyShipController findACockpit() {
+	foreach(IMyShipController cont in usableControllers) {
+		if(cont.IsWorking) {
 			return cont;
 		}
 	}
@@ -1130,11 +1122,11 @@ public bool checkNacelles() {
 
 	bool greedy = this.applyTags || this.removeTags;
 
-	ShipController cont = findACockpit();
+	IMyShipController cont = findACockpit();
 	if(cont == null) {
 		Echo("No cockpit registered, checking everything.");
 	} else if(!greedy) {
-		MyShipMass shipmass = cont.theBlock.CalculateShipMass();
+		MyShipMass shipmass = cont.CalculateShipMass();
 		if(this.oldMass == shipmass.BaseMass) {
 			Echo("Mass is the same, everything is good.");
 
@@ -1149,7 +1141,7 @@ public bool checkNacelles() {
 		this.surfaces.Clear();
 	}
 
-	List<ShipController> conts = new List<ShipController>();
+	List<IMyShipController> conts = new List<IMyShipController>();
 	List<IMyMotorStator> rots = new List<IMyMotorStator>();
 	List<IMyThrust> thrs = new List<IMyThrust>();
 	List<IMyTextPanel> txts = new List<IMyTextPanel>();
@@ -1160,7 +1152,7 @@ public bool checkNacelles() {
 		GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks);
 		for(int i = 0; i < blocks.Count; i++) {
 			if(blocks[i] is IMyShipController) {
-				conts.Add(new ShipController((IMyShipController)blocks[i]));
+				conts.Add((IMyShipController)blocks[i]);
 			}
 			if(blocks[i] is IMyMotorStator) {
 				rots.Add((IMyMotorStator)blocks[i]);
@@ -1187,7 +1179,7 @@ public bool checkNacelles() {
 	bool updateNacelles = false;
 
 	// if you use the following if statement, it won't lock the non-main cockpit if someone sets the main cockpit, until a recompile or world load :/
-	if(/*(mainController != null ? !mainController.theBlock.IsMainCockpit : false) || */controllers.Count != conts.Count || cont == null || greedy) {
+	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */controllers.Count != conts.Count || cont == null || greedy) {
 		Echo($"Controller count ({controllers.Count}) is out of whack (current: {conts.Count})");
 		if(!getControllers(conts)) {
 			return false;
@@ -1802,16 +1794,6 @@ public class Rotor : BlockWrapper<IMyMotorStator> {
 
 }
 
-public class ShipController : BlockWrapper<IMyShipController> {
-
-	public ShipController(IMyShipController theBlock) : base(theBlock) {
-	}
-
-	public void setDampener(bool val) {
-		theBlock.DampenersOverride = val;
-	}
-}
-
 public abstract class BlockWrapper<T> where T: class, IMyTerminalBlock {
     public T theBlock { get; set; }
 
@@ -1849,7 +1831,6 @@ public static class CustomProgramExtensions {
 		return Vector3D.TransformNormal(cont.MoveIndicator, cont.WorldMatrix);
 	}
 
-
 	public static string progressBar(this double val) {
 		char[] bar = {' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '};
 		for(int i = 0; i < 10; i++) {
@@ -1886,14 +1867,7 @@ public static class CustomProgramExtensions {
 	}
 
 	public static String toString(this Vector3D val) {
-		return $"X:{val.X} Y:{val.Y} Z:{val.Z}";
-	}
-
-	public static String toString(this Vector3D val, bool pretty) {
-		if(!pretty)
-			return val.toString();
-		else
-			return $"X:{val.X}\nY:{val.Y}\nZ:{val.Z}\n";
+		return $"X:{val.X,10:N2} Y:{val.Y,10:N2} Z:{val.Z,10:N2}";
 	}
 
 	public static String toString(this bool val) {
