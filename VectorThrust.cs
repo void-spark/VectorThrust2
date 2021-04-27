@@ -127,22 +127,11 @@ public const string resetAccel = "pipe";
 // 	c.sprint (shift)	3g
 // 	ctrl 			0.3g
 public const bool useBoosts = true;
-public BA[] boosts = {
-	new BA("c.sprint", 3f),
-	new BA("ctrl", 0.3f)
+
+public KeyValuePair<string,float>[] boosts = {
+	new KeyValuePair<string,float>("c.sprint", 3f),
+	new KeyValuePair<string,float>("ctrl", 0.3f)
 };
-
-
-
-public struct BA {
-	public string button;
-	public float accel;
-
-	public BA(string button, float accel) {
-		this.button = button;
-		this.accel = accel;
-	}
-}
 
 
 
@@ -269,7 +258,22 @@ public long programCounter;
 public long gotNacellesCount;
 public long updateNacellesCount;
 
+string lastArg = "";
+
 public void Main(string argument, UpdateType runType) {
+
+	if(argument.Length != 0) {
+		lastArg = argument;
+	}
+
+	// Only accept arguments on certain update types
+	UpdateType valid_argument_updates = UpdateType.None;
+	valid_argument_updates |= UpdateType.Terminal;
+	valid_argument_updates |= UpdateType.Trigger;
+	valid_argument_updates |= UpdateType.Script;
+	if((runType & valid_argument_updates) == UpdateType.None) {
+		argument = "";
+	}
 
 	if(!doStartup(argument, runType)) {
 		return;
@@ -282,10 +286,10 @@ public void Main(string argument, UpdateType runType) {
 
 	Vector3D shipVel;
 	float shipPhysicalMass;
-	float gravLength;
+	float worldGravAccMag;
 	Vector3D requiredThrustVec;
  
-	doPhysics(desiredVec, out shipVel, out shipPhysicalMass, out gravLength, out requiredThrustVec);
+	doPhysics(desiredVec, out shipVel, out shipPhysicalMass, out worldGravAccMag, out requiredThrustVec);
 
 
 
@@ -318,8 +322,10 @@ public void Main(string argument, UpdateType runType) {
 	}
 
 	// update thrusters on/off and re-check nacelles direction
-	bool gravChanged = Math.Abs(lastGrav - gravLength) > 0.05f;
-	lastGrav = gravLength;
+	bool gravChanged = Math.Abs(lastGrav - worldGravAccMag) > 0.05f;
+	if(gravChanged) {
+		lastGrav = worldGravAccMag;
+	}
 	foreach(Nacelle n in nacelles) {
 		// we want to update if the thrusters are not valid, or atmosphere has changed
 		if(!n.validateThrusters(jetpack) || gravChanged) {
@@ -385,16 +391,15 @@ public void Main(string argument, UpdateType runType) {
 			// }
 		}
 	}/* end of TODO */
-	Echo("Total Force: " + $"{Math.Round(total,0)}" + "N");
+	Echo($"Total Force: {total:N0}N");
 
 
-
-
-	write("Target Accel: " + Math.Round(getAcceleration(gravLength)/gravLength, 2) + "g");
-	write("Thrusters: " + jetpack);
-	write("Dampeners: " + dampeners);
-	write("Cruise: " + cruise);
-	write("Active Nacelles: " + nacelles.Count);//TODO: make activeNacelles account for the number of nacelles that are actually active (activeThrusters.Count > 0)
+	write($"Last cmd: {lastArg}");
+	write($"Target Accel: {getAccelerationMul():N2}g");
+	write($"Thrusters: {jetpack}");
+	write($"Dampeners: {dampeners}");
+	write($"Cruise: {cruise}");
+	write($"Active Nacelles: {nacelles.Count}");//TODO: make activeNacelles account for the number of nacelles that are actually active (activeThrusters.Count > 0)
 	// write("Got Nacelles: " + gotNacellesCount);
 	// write("Update Nacelles: " + updateNacellesCount);
 	// ========== END OF MAIN ==========
@@ -451,7 +456,7 @@ public const string offtag = standbySurround + myName + standbySurround;
 public bool applyTags = false;
 public bool removeTags = false;
 public bool greedy = true;
-public float lastGrav = 0;
+public float lastGrav = -1;
 public bool thrustOn = false;
 
 public Dictionary<string, object> CMinputs = null;
@@ -463,18 +468,7 @@ public bool doStartup(string argument, UpdateType runType) {
 	Echo($"Last Runtime {Runtime.LastRunTimeMs.Round(2)}ms");
 	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs.Round(0)}ms");
 
-	// only accept arguments on certain update types
-	UpdateType valid_argument_updates = UpdateType.None;
-	valid_argument_updates |= UpdateType.Terminal;
-	valid_argument_updates |= UpdateType.Trigger;
-	valid_argument_updates |= UpdateType.Script;
-	if((runType & valid_argument_updates) == UpdateType.None) {
-		// runtype is not one that is allowed to give arguments
-		argument = "";
-	}
 	Echo($"Greedy: {this.greedy}");
-
-	argument = argument.ToLower();
 
 	bool anyArg = Array.Exists(allArgs, arg => isArg(argument, arg));
 
@@ -545,7 +539,7 @@ public bool doStartup(string argument, UpdateType runType) {
 	return true;
 }
 
-public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipPhysicalMass, out float gravLength, out Vector3D requiredThrustVec) {
+public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipPhysicalMass, out float worldGravAccMag, out Vector3D requiredThrustVec) {
 
  	// Get gravity in world space, gravity is measured as acceleration in m/s^2.
 	Vector3D worldGravAcc = usableControllers[0].GetNaturalGravity();
@@ -562,10 +556,10 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipP
 		shipPhysicalMass = 0.001f;
 	}
 
-	// setup gravity
-	gravLength = (float)worldGravAcc.Length();
-	if(gravLength < gravCutoff) {
-		gravLength = zeroGAcceleration;
+	// Get the magintude of the gravity vector, use a fake value if we're not in a gravity well.
+	worldGravAccMag = (float)worldGravAcc.Length();
+	if(worldGravAccMag < gravCutoff) {
+		worldGravAccMag = zeroGAcceleration;
 		thrustModifierAbove = thrustModifierAboveSpace;
 		thrustModifierBelow = thrustModifierBelowSpace;
 	} else {
@@ -614,7 +608,7 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipP
 		desiredVec -= dampVec * dampenersModifier;
 	}
 
-	desiredVec *= shipPhysicalMass * (float)getAcceleration(gravLength);
+	desiredVec *= shipPhysicalMass * worldGravAccMag * getAccelerationMul();
 
 	// point thrust in opposite direction, add weight. this is force, not acceleration
 	requiredThrustVec = -desiredVec + shipWeightForce;
@@ -634,7 +628,7 @@ public String formatVec(Vector3D vec, IMyEntity entity) {
 }
 
 public bool isArg(string argument, string toCheck) {
-	return argument.Contains(toCheck.ToLower());
+	return argument.ToLower().Contains(toCheck.ToLower());
 }
 
 public void enterStandby() {
@@ -789,11 +783,11 @@ public void write(string str) {
 	globalAppend = true;
 }
 
-double getAcceleration(double gravity) {
+float getAccelerationMul() {
 	// Look through boosts, applies acceleration of first one found. If none found or boosts not enabled, go for normal accel
-	int boostIndex = useBoosts && this.controlModule ? Array.FindIndex(this.boosts, boost => this.CMinputs.ContainsKey(boost.button)) : -1;
-	double accel = boostIndex != -1 ? this.boosts[boostIndex].accel : Math.Pow(accelBase, accelExponent);
-	return accel * gravity * defaultAccel;
+	int boostIndex = useBoosts && this.controlModule ? Array.FindIndex(this.boosts, boost => this.CMinputs.ContainsKey(boost.Key)) : -1;
+	float accel = boostIndex != -1 ? this.boosts[boostIndex].Value : (float)Math.Pow(accelBase, accelExponent);
+	return accel * defaultAccel;
 }
 
 public Vector3D getMovementInput(string arg) {
