@@ -280,26 +280,26 @@ public void Main(string argument, UpdateType runType) {
 	Vector3D desiredVec = getMovementInput(argument);
 
 
-	Vector3D shipVelocity;
-	float shipMass;
+	Vector3D shipVel;
+	float shipPhysicalMass;
 	float gravLength;
 	Vector3D requiredThrustVec;
  
-	doPhysics(desiredVec, out shipVelocity, out shipMass, out gravLength, out requiredThrustVec);
+	doPhysics(desiredVec, out shipVel, out shipPhysicalMass, out gravLength, out requiredThrustVec);
 
 
 
 	// ========== DISTRIBUTE THE FORCE EVENLY BETWEEN NACELLES ==========
 
 	// hysteresis
-	if(requiredThrustVec.Length() > lowThrustCutOn * gravCutoff * shipMass) {//TODO: this causes problems if there are many small nacelles
+	if(requiredThrustVec.Length() > lowThrustCutOn * gravCutoff * shipPhysicalMass) {//TODO: this causes problems if there are many small nacelles
 		thrustOn = true;
 	}
-	if(requiredThrustVec.Length() < lowThrustCutOff * gravCutoff * shipMass) {
+	if(requiredThrustVec.Length() < lowThrustCutOff * gravCutoff * shipPhysicalMass) {
 		thrustOn = false;
 	}
 
-	//Echo($"thrustOn: {thrustOn} \n{Math.Round(requiredThrustVec.Length()/(gravCutoff*shipMass), 2)}\n{Math.Round(requiredThrustVec.Length()/(gravCutoff*shipMass*0.01), 2)}");
+	//Echo($"thrustOn: {thrustOn} \n{Math.Round(requiredThrustVec.Length()/(gravCutoff*shipPhysicalMass), 2)}\n{Math.Round(requiredThrustVec.Length()/(gravCutoff*shipPhysicalMass*0.01), 2)}");
 
 	// maybe lerp this in the future
 	if(!thrustOn) {// Zero G
@@ -311,9 +311,9 @@ public void Main(string argument, UpdateType runType) {
 			zero_G_accel = (usableControllers[0].WorldMatrix.Down + usableControllers[0].WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
 		}
 		if(dampeners) {
-			requiredThrustVec = zero_G_accel * shipMass + requiredThrustVec;
+			requiredThrustVec = zero_G_accel * shipPhysicalMass + requiredThrustVec;
 		} else {
-			requiredThrustVec = (requiredThrustVec - shipVelocity) + zero_G_accel;
+			requiredThrustVec = (requiredThrustVec - shipVel) + zero_G_accel;
 		}
 	}
 
@@ -376,7 +376,7 @@ public void Main(string argument, UpdateType runType) {
 			g[i].thrustModifierAbove = thrustModifierAbove;
 			g[i].thrustModifierBelow = thrustModifierBelow;
 			// Echo(g[i].errStr);
-			g[i].go(jetpack, dampeners, shipMass);
+			g[i].go(jetpack);
 			total += req.Length();
 			// write($"nacelle {i} avail: {g[i].availableThrusters.Count} updates: {g[i].detectThrustCounter}");
 			// write(g[i].errStr);
@@ -545,25 +545,25 @@ public bool doStartup(string argument, UpdateType runType) {
 	return true;
 }
 
-public void doPhysics(Vector3D desiredVec, out Vector3D shipVelocity, out float shipMass, out float gravLength, out Vector3D requiredThrustVec) {
+public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipPhysicalMass, out float gravLength, out Vector3D requiredThrustVec) {
 
- 	// Get gravity in world space
-	Vector3D worldGrav = usableControllers[0].GetNaturalGravity();
+ 	// Get gravity in world space, gravity is measured as acceleration in m/s^2.
+	Vector3D worldGravAcc = usableControllers[0].GetNaturalGravity();
 
-	// Get velocity
-	shipVelocity = usableControllers[0].GetShipVelocities().LinearVelocity;
+	// Get velocity, which is measured in m/s, just like you see in the hud.
+	shipVel = usableControllers[0].GetShipVelocities().LinearVelocity;
 
 	// Setup mass
 	MyShipMass myShipMass = usableControllers[0].CalculateShipMass();
-	shipMass = myShipMass.PhysicalMass;
+	shipPhysicalMass = myShipMass.PhysicalMass;
 
 	if(myShipMass.BaseMass < 0.001f) {
 		Echo("Can't fly a Station");
-		shipMass = 0.001f;
+		shipPhysicalMass = 0.001f;
 	}
 
 	// setup gravity
-	gravLength = (float)worldGrav.Length();
+	gravLength = (float)worldGravAcc.Length();
 	if(gravLength < gravCutoff) {
 		gravLength = zeroGAcceleration;
 		thrustModifierAbove = thrustModifierAboveSpace;
@@ -573,22 +573,22 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVelocity, out float 
 		thrustModifierBelow = thrustModifierBelowGrav;
 	}
 
-	Vector3D shipWeightForce = shipMass * worldGrav;
+	Vector3D shipWeightForce = shipPhysicalMass * worldGravAcc;
 
 	if(dampeners) {
 		Vector3D dampVec = Vector3D.Zero;
 
-
+		// I think this prevents dampening in the direction we actually want to go.
 		if(desiredVec != Vector3D.Zero) {
-			// cancel movement opposite to desired movement direction
-			if(desiredVec.dot(shipVelocity) < 0) {
-				//if you want to go oppisite to velocity
-				dampVec += shipVelocity.project(desiredVec.normalized());
+			// Cancel movement opposite to desired movement direction
+			if(desiredVec.dot(shipVel) < 0) {
+				// If you want to go opposite to velocity
+				dampVec += shipVel.project(desiredVec.normalized());
 			}
-			// cancel sideways movement
-			dampVec += shipVelocity.reject(desiredVec.normalized());
+			// Cancel sideways movement
+			dampVec += shipVel.reject(desiredVec.normalized());
 		} else {
-			dampVec += shipVelocity;
+			dampVec += shipVel;
 		}
 
 
@@ -614,9 +614,7 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVelocity, out float 
 		desiredVec -= dampVec * dampenersModifier;
 	}
 
-
-	// f=ma
-	desiredVec *= shipMass * (float)getAcceleration(gravLength);
+	desiredVec *= shipPhysicalMass * (float)getAcceleration(gravLength);
 
 	// point thrust in opposite direction, add weight. this is force, not acceleration
 	requiredThrustVec = -desiredVec + shipWeightForce;
@@ -626,7 +624,7 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVelocity, out float 
 		requiredThrustVec += normalThruster.WorldMatrix.Backward * normalThruster.CurrentThrust;
 	}
 
-	Echo("Required Force: " + $"{Math.Round(requiredThrustVec.Length(),0)}" + "N");
+	Echo($"Required Force: {Math.Round(requiredThrustVec.Length(),0)}N");
 }
 
 // Pretty print the given world space vector in ship space.
@@ -1117,8 +1115,8 @@ public bool checkNacelles() {
 	if(cont == null) {
 		Echo("No cockpit registered, checking everything.");
 	} else if(!greedy) {
-		MyShipMass shipmass = cont.CalculateShipMass();
-		if(this.oldMass == shipmass.BaseMass) {
+		float shipBaseMass = cont.CalculateShipMass().BaseMass;
+		if(this.oldMass == shipBaseMass) {
 			Echo("Mass is the same, everything is good.");
 
 			// they may have changed the screen name to be a VT one
@@ -1127,7 +1125,7 @@ public bool checkNacelles() {
 			return true;
 		}
 		Echo("Mass is different, checking everything.");
-		this.oldMass = shipmass.BaseMass;
+		this.oldMass = shipBaseMass;
 		// surface may be exploded if mass changes, in this case, ghost surfaces my be left behind
 		this.surfaces.Clear();
 	}
@@ -1371,7 +1369,7 @@ public class Nacelle {
 	}
 
 	// final calculations and setting physical components
-	public void go(bool jetpack, bool dampeners, float shipMass) {
+	public void go(bool jetpack) {
 		errStr = "=======Nacelle=======";
 		/*errStr += $"\nactive thrusters: {activeThrusters.Count}";
 		errStr += $"\nall thrusters: {thrusters.Count}";
