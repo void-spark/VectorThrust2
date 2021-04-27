@@ -1474,68 +1474,45 @@ public class Nacelle {
 	public void detectThrustDirection() {
 		// DTerrStr = "";
 		detectThrustCounter++;
-		Vector3D engineDirection = Vector3D.Zero;
-		Vector3D engineDirectionNeg = Vector3D.Zero;
-		Vector3I thrustDir = Vector3I.Zero;
+		Dictionary<Base6Directions.Direction, float> thrustPerDirection = new Dictionary<Base6Directions.Direction, float>();
+
+		// Get the Up direction of the attached rotor top, in it's local grid space.
 		Base6Directions.Direction rotTopUp = rotor.theBlock.Top.Orientation.Up;
 
 		// add all the thrusters effective power
-		foreach(Thruster t in availableThrusters) {
-			// Base6Directions.Direction thrustForward = t.theBlock.Orientation.TransformDirection(Base6Directions.Direction.Forward); // Exhaust goes this way
-			Base6Directions.Direction thrustForward = t.theBlock.Orientation.Forward; // Exhaust goes this way
+		foreach(Thruster thruster in availableThrusters) {
+			// Get the forward direction (which is where the exhaust points) of the thruster, in it's local grid space.
+			Base6Directions.Direction thrustForward = thruster.theBlock.Orientation.Forward;
 
-			//if its not facing rotor up or rotor down
-			if(!(thrustForward == rotTopUp || thrustForward == Base6Directions.GetFlippedDirection(rotTopUp))) {
-				// add it in
-				var thrustForwardVec = Base6Directions.GetVector(thrustForward);
-				if(thrustForwardVec.X < 0 || thrustForwardVec.Y < 0 || thrustForwardVec.Z < 0) {
-					engineDirectionNeg += Base6Directions.GetVector(thrustForward) * t.theBlock.MaxEffectiveThrust;
+			// If its not facing rotor up or rotor down	
+			if(Base6Directions.GetAxis(rotTopUp) != Base6Directions.GetAxis(thrustForward)) {
+				if(!thrustPerDirection.ContainsKey(thrustForward)) {
+					thrustPerDirection[thrustForward] = thruster.theBlock.MaxEffectiveThrust;
 				} else {
-					engineDirection += Base6Directions.GetVector(thrustForward) * t.theBlock.MaxEffectiveThrust;
+					thrustPerDirection[thrustForward] += thruster.theBlock.MaxEffectiveThrust;
 				}
 			}
 		}
 
-		// get single most powerful direction
-		double max = Math.Max(engineDirection.Z, Math.Max(engineDirection.X, engineDirection.Y));
-		double min = Math.Min(engineDirectionNeg.Z, Math.Min(engineDirectionNeg.X, engineDirectionNeg.Y));
-		// DTerrStr += $"\nmax:\n{Math.Round(max, 2)}";
-		// DTerrStr += $"\nmin:\n{Math.Round(min, 2)}";
-		double maxAbs = 0;
-		if(max > -1*min) {
-			maxAbs = max;
-		} else {
-			maxAbs = min;
-		}
-		// DTerrStr += $"\nmaxAbs:\n{Math.Round(maxAbs, 2)}";
-
-		// TODO: swap onbool for each thruster that isn't in this
-		float DELTA = 0.1f;
-		if(Math.Abs(maxAbs - engineDirection.X) < DELTA) {
-			// DTerrStr += $"\nengineDirection.X";
-			thrustDir.X = 1;
-		} else if(Math.Abs(maxAbs - engineDirection.Y) < DELTA) {
-			// DTerrStr += $"\nengineDirection.Y";
-			thrustDir.Y = 1;
-		} else if(Math.Abs(maxAbs - engineDirection.Z) < DELTA) {
-			// DTerrStr += $"\nengineDirection.Z";
-			thrustDir.Z = 1;
-		} else if(Math.Abs(maxAbs - engineDirectionNeg.X) < DELTA) {
-			// DTerrStr += $"\nengineDirectionNeg.X";
-			thrustDir.X = -1;
-		} else if(Math.Abs(maxAbs - engineDirectionNeg.Y) < DELTA) {
-			// DTerrStr += $"\nengineDirectionNeg.Y";
-			thrustDir.Y = -1;
-		} else if(Math.Abs(maxAbs - engineDirectionNeg.Z) < DELTA) {
-			// DTerrStr += $"\nengineDirectionNeg.Z";
-			thrustDir.Z = -1;
-		} else {
-			// DTerrStr += $"\nERROR (detectThrustDirection):\nmaxAbs doesn't match any engineDirection\n{maxAbs}\n{engineDirection}\n{engineDirectionNeg}";
+		if(thrustPerDirection.Count == 0) {
+			// Guess no usefull thrusters found?
 			return;
 		}
 
+		float maxThrust = -1.0f; // Start negative so the first direction always has more thrust
+		Base6Directions.Direction thrustDirection = Base6Directions.Direction.Forward; // Must have a dummy initial value.
+		foreach(KeyValuePair<Base6Directions.Direction, float> directionThrust in thrustPerDirection) {
+			if(directionThrust.Value > maxThrust) {
+				maxThrust = directionThrust.Value;
+				thrustDirection = directionThrust.Key;
+			}
+		}
+
+		Vector3D thrustDir = Base6Directions.GetVector(thrustDirection);
+
 		// use thrustDir to set rotor offset
 		rotor.setPointDir((Vector3D)thrustDir);
+
 		// Base6Directions.Direction rotTopForward = rotor.theBlock.Top.Orientation.TransformDirection(Base6Directions.Direction.Forward);
 		// Base6Directions.Direction rotTopLeft = rotor.theBlock.Top.Orientation.TransformDirection(Base6Directions.Direction.Left);
 		// rotor.offset = (float)Math.Acos(rotor.angleBetweenCos(Base6Directions.GetVector(rotTopForward), (Vector3D)thrustDir));
@@ -1546,21 +1523,18 @@ public class Nacelle {
 		// 	rotor.offset = (float)(2*Math.PI - rotor.offset);
 		// }
 
-		foreach(Thruster t in thrusters) {
-			t.theBlock.Enabled = false;
-			t.IsOn = false;
+		foreach(Thruster thruster in thrusters) {
+			thruster.theBlock.Enabled = false;
+			thruster.IsOn = false;
 		}
+
+		// Put thrusters into the active list
 		activeThrusters.Clear();
-
-		// put thrusters into the active list
-		Base6Directions.Direction thrDir = Base6Directions.GetDirection(thrustDir);
-		foreach(Thruster t in availableThrusters) {
-			Base6Directions.Direction thrustForward = t.theBlock.Orientation.Forward; // Exhaust goes this way
-
-			if(thrDir == thrustForward) {
-				t.theBlock.Enabled = true;
-				t.IsOn = true;
-				activeThrusters.Add(t);
+		foreach(Thruster thruster in availableThrusters) {
+			if(thrustDirection == thruster.theBlock.Orientation.Forward) {
+				thruster.theBlock.Enabled = true;
+				thruster.IsOn = true;
+				activeThrusters.Add(thruster);
 			}
 		}
 	}
