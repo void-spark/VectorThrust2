@@ -1330,7 +1330,6 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 
 public class Nacelle {
 	public String errStr;
-	public String DTerrStr;
 	public Program program;
 
 	// physical parts
@@ -1359,7 +1358,6 @@ public class Nacelle {
 		this.availableThrusters = new HashSet<Thruster>();
 		this.activeThrusters = new HashSet<Thruster>();
 		errStr = "";
-		DTerrStr = "";
 	}
 
 	// final calculations and setting physical components
@@ -1472,7 +1470,6 @@ public class Nacelle {
 	}
 
 	public void detectThrustDirection() {
-		// DTerrStr = "";
 		detectThrustCounter++;
 		Dictionary<Base6Directions.Direction, float> thrustPerDirection = new Dictionary<Base6Directions.Direction, float>();
 
@@ -1508,20 +1505,8 @@ public class Nacelle {
 			}
 		}
 
-		Vector3D thrustDir = Base6Directions.GetVector(thrustDirection);
-
 		// use thrustDir to set rotor offset
-		rotor.setPointDir((Vector3D)thrustDir);
-
-		// Base6Directions.Direction rotTopForward = rotor.theBlock.Top.Orientation.TransformDirection(Base6Directions.Direction.Forward);
-		// Base6Directions.Direction rotTopLeft = rotor.theBlock.Top.Orientation.TransformDirection(Base6Directions.Direction.Left);
-		// rotor.offset = (float)Math.Acos(rotor.angleBetweenCos(Base6Directions.GetVector(rotTopForward), (Vector3D)thrustDir));
-
-		// disambiguate
-		// if(false && Math.Acos(rotor.angleBetweenCos(Base6Directions.GetVector(rotTopLeft), (Vector3D)thrustDir)) > Math.PI/2) {
-			// rotor.offset += (float)Math.PI;
-		// 	rotor.offset = (float)(2*Math.PI - rotor.offset);
-		// }
+		rotor.setPointDir(Base6Directions.GetVector(thrustDirection));
 
 		foreach(Thruster thruster in thrusters) {
 			thruster.theBlock.Enabled = false;
@@ -1587,9 +1572,6 @@ public class Thruster : BlockWrapper<IMyThrust> {
 
 public class Rotor : BlockWrapper<IMyMotorStator> {
 	// don't want IMyMotorBase, that includes wheels
-
-	// Depreciated, this is for the old setFromVec
-	public float offset = 0;// radians
 
 	public Vector3D direction = Vector3D.Zero;//offset relative to the head
 
@@ -1663,92 +1645,13 @@ public class Rotor : BlockWrapper<IMyMotorStator> {
 
 		//this.errStr += $"\ncurrent dir: {currentDir}\ntarget dir: {desiredVec}\ndiff: {currentDir - desiredVec}";
 
-
-		return angleBetweenCos(currentDir, desiredVec, desiredVec.Length());
+		// gets cos(angle between 2 vectors), no need to divide by lenghts, since both vectors are already length 1.
+		return Vector3D.Dot(currentDir, desiredVec);
 	}
 
 	public double setFromVec(Vector3D desiredVec) {
 		return setFromVec(desiredVec, 1);
 	}
-
-	// this sets the rotor to face the desired direction in worldspace
-	// desiredVec doesn't have to be in-line with the rotors plane of rotation
-	public double setFromVecOld(Vector3D desiredVec) {
-		desiredVec = desiredVec.reject(theBlock.WorldMatrix.Up);
-		if(Vector3D.IsZero(desiredVec) || !desiredVec.IsValid()) {
-			errStr = $"\nERROR (setFromVec()):\n\tdesiredVec is invalid\n\t{desiredVec}";
-			return -1;
-		}
-
-		double des_vec_len = desiredVec.Length();
-		double angleCos = angleBetweenCos(theBlock.WorldMatrix.Forward, desiredVec, des_vec_len);
-
-		// angle between vectors
-		float angle = -(float)Math.Acos(angleCos);
-
-		//disambiguate
-		if(Math.Acos(angleBetweenCos(theBlock.WorldMatrix.Left, desiredVec, des_vec_len)) > Math.PI/2) {
-			angle = (float)(2*Math.PI - angle);
-		}
-
-		setPos(angle + (float)(offset/* * Math.PI / 180*/));
-		return angleCos;
-	}
-
-	// gets cos(angle between 2 vectors)
-	// cos returns a number between 0 and 1
-	// use Acos to get the angle
-	public double angleBetweenCos(Vector3D a, Vector3D b) {
-		double dot = Vector3D.Dot(a, b);
-		double Length = a.Length() * b.Length();
-		return dot/Length;
-	}
-
-	// gets cos(angle between 2 vectors)
-	// cos returns a number between 0 and 1
-	// use Acos to get the angle
-	// doesn't calculate length because thats expensive
-	public double angleBetweenCos(Vector3D a, Vector3D b, double len_a_times_len_b) {
-		double dot = Vector3D.Dot(a, b);
-		return dot/len_a_times_len_b;
-	}
-
-	// set the angle to be between 0 and 2pi radians (0 and 360 degrees)
-	// this takes and returns radians
-	float cutAngle(float angle) {
-		while(angle > Math.PI) {
-			angle -= 2*(float)Math.PI;
-		}
-		while(angle < -Math.PI) {
-			angle += 2*(float)Math.PI;
-		}
-		return angle;
-	}
-
-	// move rotor to the angle (radians), make it go the shortest way possible
-	public void setPos(float x)
-	{
-		theBlock.Enabled = true;
-		x = cutAngle(x);
-		float velocity = maxRPM;
-		float x2 = cutAngle(theBlock.Angle);
-		if(Math.Abs(x - x2) < Math.PI) {
-			//dont cross origin
-			if(x2 < x) {
-				theBlock.SetValue<float>("Velocity", velocity * Math.Abs(x - x2));
-			} else {
-				theBlock.SetValue<float>("Velocity", -velocity * Math.Abs(x - x2));
-			}
-		} else {
-			//cross origin
-			if(x2 < x) {
-				theBlock.SetValue<float>("Velocity", -velocity * Math.Abs(x - x2));
-			} else {
-				theBlock.SetValue<float>("Velocity", velocity * Math.Abs(x - x2));
-			}
-		}
-	}
-
 }
 
 public abstract class BlockWrapper<T> where T: class, IMyTerminalBlock {
