@@ -72,11 +72,10 @@ public const float lowThrustCutOn = 1.0f;
 // no main cockpit: any cockpits can be used
 public const bool onlyMainCockpit = true;
 
-// choose weather you want the script to update once every frame, once every 10 frames, or once every 100 frames
+// Choose wether you want the script to update once every frame or once every 10 frames
 // should be 1 of:
 // UpdateFrequency.Update1
 // UpdateFrequency.Update10
-// UpdateFrequency.Update100
 public const UpdateFrequency update_frequency = UpdateFrequency.Update1;
 
 public const string LCDName = "%VectorLCD";
@@ -465,8 +464,8 @@ public bool doStartup(string argument, UpdateType runType) {
 	globalAppend = false;
 
 	programCounter++;
-	Echo($"Last Runtime {Runtime.LastRunTimeMs.Round(2)}ms");
-	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs.Round(0)}ms");
+	Echo($"Last Runtime {Runtime.LastRunTimeMs:N2}ms #{programCounter}");
+	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs:N0}ms");
 
 	Echo($"Greedy: {this.greedy}");
 
@@ -618,13 +617,18 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipP
 		requiredThrustVec += normalThruster.WorldMatrix.Backward * normalThruster.CurrentThrust;
 	}
 
-	Echo($"Required Force: {Math.Round(requiredThrustVec.Length(),0)}N");
+	Echo($"Required Force: {requiredThrustVec.Length():N0}N");
 }
 
 // Pretty print the given world space vector in ship space.
-public String formatVec(Vector3D vec, IMyEntity entity) {
+public static String formatVec(Vector3D vec, IMyEntity entity) {
 	Vector3D vecInEntitySpace = Vector3D.TransformNormal(vec, MatrixD.Invert(entity.WorldMatrix));
-	return $"X:{vecInEntitySpace.X,11:N2} Y:{vecInEntitySpace.Y,11:N2} Z:{vecInEntitySpace.Z,11:N2}";
+	return formatVec(vecInEntitySpace);
+}
+
+// Pretty print the given vector.
+public static String formatVec(Vector3D vec) {
+	return $"X:{vec.X,11:N2} Y:{vec.Y,11:N2} Z:{vec.Z,11:N2}";
 }
 
 public bool isArg(string argument, string toCheck) {
@@ -1573,7 +1577,8 @@ public class Thruster : BlockWrapper<IMyThrust> {
 public class Rotor : BlockWrapper<IMyMotorStator> {
 	// don't want IMyMotorBase, that includes wheels
 
-	public Vector3D direction = Vector3D.Zero;//offset relative to the head
+	// Thrust direction in rotor top local space.
+	public Vector3D direction = Vector3D.Zero;
 
 	public string errStr = "";
 	float maxRPM;
@@ -1587,70 +1592,52 @@ public class Rotor : BlockWrapper<IMyMotorStator> {
 	}
 
 	public void setPointDir(Vector3D dir) {
-		// MatrixD inv = MatrixD.Invert(theBlock.Top.WorldMatrix);
-		// direction = Vector3D.TransformNormal(dir, inv);
 		this.direction = dir;
-		//TODO: for some reason, this is equal to rotor.worldmatrix.up
 	}
 
-	/*===| Part of Rotation By Equinox on the KSH discord channel. |===*/
-	private void PointRotorAtVector(IMyMotorStator rotor, Vector3D targetDirection, Vector3D currentDirection, float multiplier) {
-		double errorScale = Math.PI * maxRPM;
-
-		Vector3D angle = Vector3D.Cross(targetDirection, currentDirection);
-		// Project onto rotor
-		double err = Vector3D.Dot(angle, rotor.WorldMatrix.Up);
-		double err2 = Vector3D.Dot(angle.normalized(), rotor.WorldMatrix.Up);
-		double diff = (rotor.WorldMatrix.Up - angle.normalized()).Length();
-
-		/*this.errStr += $"\nrotor.WorldMatrix.Up: {rotor.WorldMatrix.Up}";
-		this.errStr += $"\nangle: {Math.Acos(angleBetweenCos(angle, rotor.WorldMatrix.Up)) * 180.0 / Math.PI}";
-		this.errStr += $"\nerr: {err}";
-		this.errStr += $"\ndirection difference: {diff}";
-
-		this.errStr += $"\ncurrDir vs Up: {currentDirection.Dot(rotor.WorldMatrix.Up)}";
-		this.errStr += $"\ntargetDir vs Up: {targetDirection.Dot(rotor.WorldMatrix.Up)}";
-
-		this.errStr += $"\nmaxRPM: {maxRPM}";
-		this.errStr += $"\nerrorScale: {errorScale}";
-		this.errStr += $"\nmultiplier: {multiplier}";*/
-
-
-		double rpm = err * errorScale * multiplier;
-		//double rpm = err2 * errorScale * multiplier;
-		// errStr += $"\nSETTING ROTOR TO {err:N2}";
-		if (rpm > maxRPM) {
-			rotor.TargetVelocityRPM = maxRPM;
-			// this.errStr += $"\nRPM Exceedes Max";
-		} else if ((rpm*-1) > maxRPM) {
-			rotor.TargetVelocityRPM = maxRPM * -1;
-			// this.errStr += $"\nRPM Exceedes -Max";
-		} else {
-			rotor.TargetVelocityRPM = (float)rpm;
-		}
-		// this.errStr += $"\nRPM: {(rotor.TargetVelocityRPM).Round(5)}";
-	}
-
-	// this sets the rotor to face the desired direction in worldspace
-	// desiredVec doesn't have to be in-line with the rotors plane of rotation
-	public double setFromVec(Vector3D desiredVec, float multiplier) {
+	// This sets the rotor to face the desired direction in worldspace
+	// desiredVec must be in-line with the rotors plane of rotation
+	public double setFromVec(Vector3D desiredVec) {
 		errStr = "";
-		//desiredVec = desiredVec.reject(theBlock.WorldMatrix.Up);
-		desiredVec.Normalize();
-		//Vector3D currentDir = Vector3D.TransformNormal(this.direction, theBlock.Top.WorldMatrix);
-		//                                                                 ^ only correct if it was built from the head
-		//                                                                   it needs to be based on the grid
-		Vector3D currentDir = Vector3D.TransformNormal(this.direction, theBlock.Top.CubeGrid.WorldMatrix);
-		PointRotorAtVector(theBlock, desiredVec, currentDir/*theBlock.Top.WorldMatrix.Forward*/, multiplier);
 
-		//this.errStr += $"\ncurrent dir: {currentDir}\ntarget dir: {desiredVec}\ndiff: {currentDir - desiredVec}";
+		// The thrust direction of the current nacelle/rotor, in world space.
+		Vector3D currentDir = Vector3D.TransformNormal(this.direction, theBlock.Top.WorldMatrix);
+		// The rotation axis of the current nacelle/rotor, in world space.
+		Vector3D normal = theBlock.WorldMatrix.Up;
+		// Normalize the target direction vector.
+		desiredVec.Normalize();
+
+		// This clever bit of math gives us the correctly signed sine of the angle between the target and current direction vectors.
+		// But only if all three vectors are normalized, and both target and current direction vectors are in the plane perpendicular to the normal vector.
+		double errSin = Vector3D.Dot(Vector3D.Cross(desiredVec, currentDir), normal);
+		double errRad = Math.Asin(errSin);
+
+		// Downside here is that thrustsers turn slower with slower updates, but otherwise we get wobble.
+		int ticks = update_frequency == UpdateFrequency.Update1 ? 1 : 10;
+
+		// We want to go fast, but not so fast we'll overshoot at the next update.
+		// The normal rate is 60 ticks/s.
+		// We use TargetVelocityRad, which is rad's per second.
+		// So, try to rotate the rad we want, in one update worth of seconds.
+		float maxRadS = (maxRPM / 30.0f) * (float)Math.PI;
+		double secondsPerTick = 1.0 / 60.0;
+		double secondsPerUpdate = secondsPerTick * ticks;
+		double radS = errRad / secondsPerUpdate;
+
+		// Using exactly 1 update causes all the wobble, probably because of inertia, so give it a few more updates.
+		// TODO: Can we use a PID controller here?
+		radS /= 4;
+
+		if (radS > maxRadS) {
+			theBlock.TargetVelocityRad = maxRadS;
+		} else if (radS * -1 > maxRadS) {
+			theBlock.TargetVelocityRad = maxRadS * -1;
+		} else {
+			theBlock.TargetVelocityRad = (float)radS;
+		}
 
 		// gets cos(angle between 2 vectors), no need to divide by lenghts, since both vectors are already length 1.
 		return Vector3D.Dot(currentDir, desiredVec);
-	}
-
-	public double setFromVec(Vector3D desiredVec) {
-		return setFromVec(desiredVec, 1);
 	}
 }
 
@@ -1712,18 +1699,6 @@ public static class CustomProgramExtensions {
 
 	public static string progressBar(this Vector3D val) {
 		return val.Length().progressBar();
-	}
-
-	public static Vector3D Round(this Vector3D vec, int num) {
-		return Vector3D.Round(vec, num);
-	}
-
-	public static double Round(this double val, int num) {
-		return Math.Round(val, num);
-	}
-
-	public static float Round(this float val, int num) {
-		return (float)Math.Round(val, num);
 	}
 
 	public static String toString(this bool val) {
