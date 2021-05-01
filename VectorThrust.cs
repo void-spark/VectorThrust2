@@ -341,7 +341,7 @@ public void Main(string argument, UpdateType runType) {
 	for(int i = 0; i < nacelles.Count; i++) {
 		bool foundGroup = false;
 		foreach(List<Nacelle> g in nacelleGroups) {// check each group to see if its lined up
-			if(Math.Abs(Vector3D.Dot(nacelles[i].rotor.theBlock.WorldMatrix.Up, g[0].rotor.theBlock.WorldMatrix.Up)) > 0.9f) {
+			if(Math.Abs(Vector3D.Dot(nacelles[i].rotor.WorldMatrix.Up, g[0].rotor.WorldMatrix.Up)) > 0.9f) {
 				g.Add(nacelles[i]);
 				foundGroup = true;
 				break;
@@ -357,7 +357,7 @@ public void Main(string argument, UpdateType runType) {
 	Vector3D asdf = Vector3D.Zero;
 	// 1
 	foreach(List<Nacelle> g in nacelleGroups) {
-		g[0].requiredThrustVec = requiredThrustVec.reject(g[0].rotor.theBlock.WorldMatrix.Up);
+		g[0].requiredThrustVec = requiredThrustVec.reject(g[0].rotor.WorldMatrix.Up);
 		asdf += g[0].requiredThrustVec;
 	}
 	// 2
@@ -641,8 +641,8 @@ public void enterStandby() {
 
 	//set status of blocks
 	foreach(Nacelle n in nacelles) {
-		n.rotor.theBlock.Enabled = false;
-		standbyTag(n.rotor.theBlock);
+		n.rotor.Enabled = false;
+		standbyTag(n.rotor);
 		foreach(Thruster t in n.thrusters) {
 			t.theBlock.Enabled = false;
 			standbyTag(t.theBlock);
@@ -668,8 +668,8 @@ public void exitStandby() {
 
 	//set status of blocks
 	foreach(Nacelle n in nacelles) {
-		n.rotor.theBlock.Enabled = true;
-		activeTag(n.rotor.theBlock);
+		n.rotor.Enabled = true;
+		activeTag(n.rotor);
 		foreach(Thruster t in n.thrusters) {
 			if(t.IsOn) {
 				t.theBlock.Enabled = true;
@@ -1296,8 +1296,7 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 
 		// it's not set to not be a nacelle rotor
 		// it's topgrid is not the programmable blocks grid
-		Rotor rotor = new Rotor(current, this.maxRotorRPM);
-		this.nacelles.Add(new Nacelle(rotor, this));
+		this.nacelles.Add(new Nacelle(current, maxRotorRPM, this));
 	}
 
 	Echo("Getting Thrusters");
@@ -1309,7 +1308,7 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 				removeTag(thrusters[j]);
 			}
 
-			if(thrusters[j].CubeGrid != this.nacelles[i].rotor.theBlock.TopGrid) continue;// thruster is not for the current nacelle
+			if(thrusters[j].CubeGrid != this.nacelles[i].rotor.TopGrid) continue;// thruster is not for the current nacelle
 			// if(!thrusters[j].IsFunctional) continue;// broken, don't add it
 
 			if(this.applyTags) {
@@ -1321,7 +1320,7 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 		}
 		// remove this.nacelles (rotors) without thrusters
 		if(this.nacelles[i].thrusters.Count == 0) {
-			removeTag(this.nacelles[i].rotor.theBlock);
+			removeTag(this.nacelles[i].rotor);
 			this.nacelles.RemoveAt(i);// there is no more reference to the rotor, should be garbage collected
 			continue;
 		}
@@ -1337,7 +1336,13 @@ public class Nacelle {
 	public Program program;
 
 	// physical parts
-	public Rotor rotor;
+	public IMyMotorStator rotor;
+	// Thrust direction in rotor top local space.
+	public Vector3D direction = Vector3D.Zero;
+	// Max RPM allowed for rotor.
+	float maxRPM;
+
+
 	public HashSet<Thruster> thrusters;// all the thrusters
 	public HashSet<Thruster> availableThrusters;// <= thrusters: the ones the user chooses to be used (ShowInTerminal)
 	public HashSet<Thruster> activeThrusters;// <= activeThrusters: the ones that are facing the direction that produces the most thrust (only recalculated if available thrusters changes)
@@ -1355,9 +1360,16 @@ public class Nacelle {
 
 
 	public Nacelle() {}// don't use this if it is possible for the instance to be kept
-	public Nacelle(Rotor rotor, Program program) {
+	public Nacelle(IMyMotorStator rotor, float maxRotorRPM, Program program) {
+		// don't want IMyMotorBase, that includes wheels
+
 		this.program = program;
 		this.rotor = rotor;
+		if(maxRotorRPM <= 0) {
+			maxRPM = rotor.GetMaximum<float>("Velocity");
+		} else {
+			maxRPM = maxRotorRPM;
+		}
 		this.thrusters = new HashSet<Thruster>();
 		this.availableThrusters = new HashSet<Thruster>();
 		this.activeThrusters = new HashSet<Thruster>();
@@ -1372,11 +1384,10 @@ public class Nacelle {
 		errStr += $"\nrequired force: {(int)requiredThrustVec.Length()}N\n";*/
 		totalEffectiveThrust = (float)calcTotalEffectiveThrust(activeThrusters);
 
-		double angleCos = rotor.setFromVec(requiredThrustVec);
-		/*errStr += $"\n=======rotor=======";
-		errStr += $"\nname: '{rotor.theBlock.CustomName}'";
-		errStr += $"\n{rotor.errStr}";
-		errStr += $"\n-------rotor-------";*/
+		//errStr += $"\n=======rotor=======";
+		//errStr += $"\nname: '{rotor.CustomName}'";
+		double angleCos = setFromVec(requiredThrustVec);
+		//errStr += $"\n-------rotor-------";
 
 
 		// the clipping value 'thrustModifier' defines how far the rotor can be away from the desired direction of thrust, and have the power still at max
@@ -1431,6 +1442,48 @@ public class Nacelle {
 		return total;
 	}
 
+	// This sets the rotor to face the desired direction in worldspace
+	// desiredVec must be in-line with the rotors plane of rotation
+	public double setFromVec(Vector3D desiredVec) {
+		// The thrust direction of the current nacelle/rotor, in world space.
+		Vector3D currentDir = Vector3D.TransformNormal(direction, rotor.Top.WorldMatrix);
+		// The rotation axis of the current nacelle/rotor, in world space.
+		Vector3D normal = rotor.WorldMatrix.Up;
+		// Normalize the target direction vector.
+		desiredVec.Normalize();
+
+		// This clever bit of math gives us the correctly signed sine of the angle between the target and current direction vectors.
+		// But only if all three vectors are normalized, and both target and current direction vectors are in the plane perpendicular to the normal vector.
+		double errSin = Vector3D.Dot(Vector3D.Cross(desiredVec, currentDir), normal);
+		double errRad = Math.Asin(errSin);
+
+		// Downside here is that thrustsers turn slower with slower updates, but otherwise we get wobble.
+		int ticks = update_frequency == UpdateFrequency.Update1 ? 1 : 10;
+
+		// We want to go fast, but not so fast we'll overshoot at the next update.
+		// The normal rate is 60 ticks/s.
+		// We use TargetVelocityRad, which is rad's per second.
+		// So, try to rotate the rad we want, in one update worth of seconds.
+		float maxRadS = (maxRPM / 30.0f) * (float)Math.PI;
+		double secondsPerTick = 1.0 / 60.0;
+		double secondsPerUpdate = secondsPerTick * ticks;
+		double radS = errRad / secondsPerUpdate;
+
+		// Using exactly 1 update causes all the wobble, probably because of inertia, so give it a few more updates.
+		// TODO: Can we use a PID controller here?
+		radS /= 4;
+
+		if (radS > maxRadS) {
+			rotor.TargetVelocityRad = maxRadS;
+		} else if (radS * -1 > maxRadS) {
+			rotor.TargetVelocityRad = maxRadS * -1;
+		} else {
+			rotor.TargetVelocityRad = (float)radS;
+		}
+
+		// gets cos(angle between 2 vectors), no need to divide by lenghts, since both vectors are already length 1.
+		return Vector3D.Dot(currentDir, desiredVec);
+	}
 
 	//true if all thrusters are good
 	public bool validateThrusters(bool jetpack) {
@@ -1478,7 +1531,7 @@ public class Nacelle {
 		Dictionary<Base6Directions.Direction, float> thrustPerDirection = new Dictionary<Base6Directions.Direction, float>();
 
 		// Get the Up direction of the attached rotor top, in it's local grid space.
-		Base6Directions.Direction rotTopUp = rotor.theBlock.Top.Orientation.Up;
+		Base6Directions.Direction rotTopUp = rotor.Top.Orientation.Up;
 
 		// add all the thrusters effective power
 		foreach(Thruster thruster in availableThrusters) {
@@ -1509,8 +1562,8 @@ public class Nacelle {
 			}
 		}
 
-		// use thrustDir to set rotor offset
-		rotor.setPointDir(Base6Directions.GetVector(thrustDirection));
+		// use thrustDirection to set rotor offset
+		this.direction = Base6Directions.GetVector(thrustDirection);
 
 		foreach(Thruster thruster in thrusters) {
 			thruster.theBlock.Enabled = false;
@@ -1571,73 +1624,6 @@ public class Thruster : BlockWrapper<IMyThrust> {
 		theBlock.ThrustOverride = (float)(thrust * theBlock.MaxThrust / theBlock.MaxEffectiveThrust);
 		/*errStr += $"\nEffective {(100*theBlock.MaxEffectiveThrust / theBlock.MaxThrust).Round(1)}%";
 		errStr += $"\nOverride {theBlock.ThrustOverride}N";*/
-	}
-}
-
-public class Rotor : BlockWrapper<IMyMotorStator> {
-	// don't want IMyMotorBase, that includes wheels
-
-	// Thrust direction in rotor top local space.
-	public Vector3D direction = Vector3D.Zero;
-
-	public string errStr = "";
-	float maxRPM;
-
-	public Rotor(IMyMotorStator rotor, float maxRotorRPM) : base(rotor) {
-		if(maxRotorRPM <= 0) {
-			maxRPM = rotor.GetMaximum<float>("Velocity");
-		} else {
-			maxRPM = maxRotorRPM;
-		}
-	}
-
-	public void setPointDir(Vector3D dir) {
-		this.direction = dir;
-	}
-
-	// This sets the rotor to face the desired direction in worldspace
-	// desiredVec must be in-line with the rotors plane of rotation
-	public double setFromVec(Vector3D desiredVec) {
-		errStr = "";
-
-		// The thrust direction of the current nacelle/rotor, in world space.
-		Vector3D currentDir = Vector3D.TransformNormal(this.direction, theBlock.Top.WorldMatrix);
-		// The rotation axis of the current nacelle/rotor, in world space.
-		Vector3D normal = theBlock.WorldMatrix.Up;
-		// Normalize the target direction vector.
-		desiredVec.Normalize();
-
-		// This clever bit of math gives us the correctly signed sine of the angle between the target and current direction vectors.
-		// But only if all three vectors are normalized, and both target and current direction vectors are in the plane perpendicular to the normal vector.
-		double errSin = Vector3D.Dot(Vector3D.Cross(desiredVec, currentDir), normal);
-		double errRad = Math.Asin(errSin);
-
-		// Downside here is that thrustsers turn slower with slower updates, but otherwise we get wobble.
-		int ticks = update_frequency == UpdateFrequency.Update1 ? 1 : 10;
-
-		// We want to go fast, but not so fast we'll overshoot at the next update.
-		// The normal rate is 60 ticks/s.
-		// We use TargetVelocityRad, which is rad's per second.
-		// So, try to rotate the rad we want, in one update worth of seconds.
-		float maxRadS = (maxRPM / 30.0f) * (float)Math.PI;
-		double secondsPerTick = 1.0 / 60.0;
-		double secondsPerUpdate = secondsPerTick * ticks;
-		double radS = errRad / secondsPerUpdate;
-
-		// Using exactly 1 update causes all the wobble, probably because of inertia, so give it a few more updates.
-		// TODO: Can we use a PID controller here?
-		radS /= 4;
-
-		if (radS > maxRadS) {
-			theBlock.TargetVelocityRad = maxRadS;
-		} else if (radS * -1 > maxRadS) {
-			theBlock.TargetVelocityRad = maxRadS * -1;
-		} else {
-			theBlock.TargetVelocityRad = (float)radS;
-		}
-
-		// gets cos(angle between 2 vectors), no need to divide by lenghts, since both vectors are already length 1.
-		return Vector3D.Dot(currentDir, desiredVec);
 	}
 }
 
