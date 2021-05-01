@@ -278,6 +278,9 @@ public void Main(string argument, UpdateType runType) {
 		return;
 	}
 
+	MatrixD shipWorldMatrix = mainController != null ? mainController.WorldMatrix : usableControllers[0].WorldMatrix;
+	MatrixD worldShipMatrix = MatrixD.Invert(shipWorldMatrix);
+
 	// Get a vector indicating where we want to go, in world space.
 	// For each key held a vector length 1 is added in the respective direction, analog controllers are analog and might have a bigger value.
 	Vector3D desiredVec = getMovementInput(argument);
@@ -307,12 +310,7 @@ public void Main(string argument, UpdateType runType) {
 	// maybe lerp this in the future
 	if(!thrustOn) {// Zero G
 		//Echo("\nnot much thrust");
-		Vector3D zero_G_accel = Vector3D.Zero;
-		if(mainController != null) {
-			zero_G_accel = (mainController.WorldMatrix.Down + mainController.WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
-		} else {
-			zero_G_accel = (usableControllers[0].WorldMatrix.Down + usableControllers[0].WorldMatrix.Backward) * zeroGAcceleration / 1.414f;
-		}
+		Vector3D zero_G_accel = (shipWorldMatrix.Down + shipWorldMatrix.Backward) * zeroGAcceleration / 1.414f;
 		if(dampeners) {
 			requiredThrustVec = zero_G_accel * shipPhysicalMass + requiredThrustVec;
 		} else {
@@ -321,10 +319,9 @@ public void Main(string argument, UpdateType runType) {
 	}
 
 	// update thrusters on/off and re-check nacelles direction
-	bool gravChanged = Math.Abs(lastGrav - worldGravAccMag) > 0.05f;
-	if(gravChanged) {
-		lastGrav = worldGravAccMag;
-	}
+	// When we switch to/from fake zero-G grav I guess, which is usually near where atmospheric thrusters stop working?
+	bool gravChanged = Math.Abs(lastGrav - worldGravAccMag) > 0.05f; 
+	lastGrav = worldGravAccMag;
 	foreach(Nacelle n in nacelles) {
 		// we want to update if the thrusters are not valid, or atmosphere has changed
 		if(!n.validateThrusters(jetpack) || gravChanged) {
@@ -335,61 +332,66 @@ public void Main(string argument, UpdateType runType) {
 		// Echo($"active: {n.activeThrusters.Count}");
 	}
 
-	/* TOOD: redo this */
-	// group similar nacelles (rotor axis is same direction)
-	List<List<Nacelle>> nacelleGroups = new List<List<Nacelle>>();
-	for(int i = 0; i < nacelles.Count; i++) {
-		bool foundGroup = false;
-		foreach(List<Nacelle> g in nacelleGroups) {// check each group to see if its lined up
-			if(Math.Abs(Vector3D.Dot(nacelles[i].rotor.WorldMatrix.Up, g[0].rotor.WorldMatrix.Up)) > 0.9f) {
-				g.Add(nacelles[i]);
-				foundGroup = true;
-				break;
-			}
+	// We expect any rotor to be aligned with one of the ships primary axes.
+	// Otherwise solving becomes far harder (and it's hard enough already!).
+	// So stick rotors on rotors or hinges, and you get what you deserve.
+
+	// Group nacelles among the 3 primary axes.
+	Dictionary<Base6Directions.Axis, List<Nacelle>> nacelleGroups = new Dictionary<Base6Directions.Axis, List<Nacelle>>();
+	foreach(Nacelle nacelle in nacelles) {
+		Vector3D rotorUpInShipSpace = Vector3D.TransformNormal(nacelle.rotor.WorldMatrix.Up, worldShipMatrix);
+		Base6Directions.Axis axis = Base6Directions.GetAxis(Base6Directions.GetDirection(rotorUpInShipSpace));
+		if(!nacelleGroups.ContainsKey(axis)) {
+			nacelleGroups[axis] = new List<Nacelle>();
 		}
-		if(!foundGroup) {// if it never found a group, add a group
-			nacelleGroups.Add(new List<Nacelle>());
-			nacelleGroups[nacelleGroups.Count-1].Add(nacelles[i]);
-		}
+		nacelleGroups[axis].Add(nacelle);
 	}
 
-	// correct for misaligned nacelles
+	// The main solver, note that 'regular' thrusters are controlled by the game itself,
+	// and their thrust has already been subtracted from the required thrust vector.
+	// So first the game tries to achieve wanted dampening + acceleration with the regular thrusters.
+	// And then we do the same, but on top of the solution the game has already set.
+	// Note that the game does not seem to dampen against thrusters set to a value,
+	// which is good since it won't fight us, but it also won't compensate any mistakes we make.
+	// Also note that if the game misses (counter) thrust in one direction, it will not throttle down other
+	// directions to prevent drifting that way. This is also good, since we can then provide the needed counter thrust.
+
+	// Correct for misaligned nacelles
 	Vector3D asdf = Vector3D.Zero;
-	// 1
-	foreach(List<Nacelle> g in nacelleGroups) {
+	// 1. Set the thrust vector for each first nacelle in a group to the component of the required thrust vector which is in the operating plane of the nacelle.
+	//    And add the same vector to asdf.
+	foreach(List<Nacelle> g in nacelleGroups.Values) {
 		g[0].requiredThrustVec = requiredThrustVec.reject(g[0].rotor.WorldMatrix.Up);
 		asdf += g[0].requiredThrustVec;
 	}
-	// 2
+	// 2. Subtract the full required thrust vector off asdf.
+	//   For just one plane this would give any unaccounted requested thrust in the negative.
+	//   For multiple planes sharing an axes, which duplicates/multiplies the shared component, this gives the duplicated component in positive.
 	asdf -= requiredThrustVec;
-	// 3
-	foreach(List<Nacelle> g in nacelleGroups) {
+	// 3. Remove the shared component(s) from each first nacelle in each group.
+	foreach(List<Nacelle> g in nacelleGroups.Values) {
 		g[0].requiredThrustVec -= asdf;
 	}
-	// 4
+	// 4. Divide the shared component(s) by the amount of groups (TODO: yeah, not great for anything but 2 groups..)
 	asdf /= nacelleGroups.Count;
-	// 5
-	foreach(List<Nacelle> g in nacelleGroups) {
+	// 5. Add the scaled shared component to each group again.
+	foreach(List<Nacelle> g in nacelleGroups.Values) {
 		g[0].requiredThrustVec += asdf;
 	}
-	// apply first nacelle settings to rest in each group
+	// Apply first nacelle settings to rest in each group, split evenly between the nacelles in the group.
 	double total = 0;
-	foreach(List<Nacelle> g in nacelleGroups) {
+	foreach(List<Nacelle> g in nacelleGroups.Values) {
 		Vector3D req = g[0].requiredThrustVec / g.Count;
 		for(int i = 0; i < g.Count; i++) {
 			g[i].requiredThrustVec = req;
 			g[i].thrustModifierAbove = thrustModifierAbove;
 			g[i].thrustModifierBelow = thrustModifierBelow;
-			// Echo(g[i].errStr);
 			g[i].go(jetpack);
+			//g[i].diag();
 			total += req.Length();
-			// write($"nacelle {i} avail: {g[i].availableThrusters.Count} updates: {g[i].detectThrustCounter}");
-			// write(g[i].errStr);
-			// foreach(Thruster t in g[i].activeThrusters) {
-			// 	// Echo($"Thruster: {t.theBlock.CustomName}\n{t.errStr}");
-			// }
 		}
-	}/* end of TODO */
+	}
+
 	Echo($"Total Force: {total:N0}N");
 
 
@@ -620,14 +622,15 @@ public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipP
 	Echo($"Required Force: {requiredThrustVec.Length():N0}N");
 }
 
-// Pretty print the given world space vector in ship space.
-public static String formatVec(Vector3D vec, IMyEntity entity) {
-	Vector3D vecInEntitySpace = Vector3D.TransformNormal(vec, MatrixD.Invert(entity.WorldMatrix));
-	return formatVec(vecInEntitySpace);
+// Pretty print the given normal after conversion by the given matrix.
+public static String formatNormal(ref Vector3D normal, ref MatrixD matrix) {
+	Vector3D transformed;
+	Vector3D.TransformNormal(ref normal, ref matrix, out transformed);
+	return formatVec(ref transformed);
 }
 
 // Pretty print the given vector.
-public static String formatVec(Vector3D vec) {
+public static String formatVec(ref Vector3D vec) {
 	return $"X:{vec.X,11:N2} Y:{vec.Y,11:N2} Z:{vec.Z,11:N2}";
 }
 
@@ -1300,7 +1303,7 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 	}
 
 	Echo("Getting Thrusters");
-	// add all thrusters to their corrisponding nacelle and remove this.nacelles that have none
+	// add all thrusters to their corresponding nacelle and remove this.nacelles that have none
 	for(int i = this.nacelles.Count-1; i >= 0; i--) {
 		for(int j = thrusters.Count-1; j >= 0; j--) {
 			if(!(greedy || hasTag(thrusters[j]))) { continue; }
@@ -1332,34 +1335,30 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 }
 
 public class Nacelle {
-	public String errStr;
-	public Program program;
+	private String errStr;
+	private Program program;
 
 	// physical parts
 	public IMyMotorStator rotor;
 	// Thrust direction in rotor top local space.
-	public Vector3D direction = Vector3D.Zero;
+	private Vector3D direction = Vector3D.Zero;
 	// Max RPM allowed for rotor.
-	float maxRPM;
+	private float maxRPM;
 
 
 	public HashSet<Thruster> thrusters;// all the thrusters
-	public HashSet<Thruster> availableThrusters;// <= thrusters: the ones the user chooses to be used (ShowInTerminal)
-	public HashSet<Thruster> activeThrusters;// <= activeThrusters: the ones that are facing the direction that produces the most thrust (only recalculated if available thrusters changes)
+	private HashSet<Thruster> availableThrusters;// <= thrusters: the ones the user chooses to be used (ShowInTerminal)
+	private HashSet<Thruster> activeThrusters;// <= activeThrusters: the ones that are facing the direction that produces the most thrust (only recalculated if available thrusters changes)
 
 	public double thrustModifierAbove = 0.1;// how close the rotor has to be to target position before the thruster gets to full power
 	public double thrustModifierBelow = 0.1;// how close the rotor has to be to opposite of target position before the thruster gets to 0 power
 
-	public bool oldJetpack = true;
+	private bool oldJetpack = true;
 	public Vector3D requiredThrustVec = Vector3D.Zero;
 
-	public float totalEffectiveThrust = 0;
-	public int detectThrustCounter = 0;
-	public Vector3D currDir = Vector3D.Zero;
+	private float totalEffectiveThrust = 0;
+	private int detectThrustCounter = 0;
 
-
-
-	public Nacelle() {}// don't use this if it is possible for the instance to be kept
 	public Nacelle(IMyMotorStator rotor, float maxRotorRPM, Program program) {
 		// don't want IMyMotorBase, that includes wheels
 
@@ -1378,17 +1377,11 @@ public class Nacelle {
 
 	// final calculations and setting physical components
 	public void go(bool jetpack) {
-		errStr = "=======Nacelle=======";
-		/*errStr += $"\nactive thrusters: {activeThrusters.Count}";
-		errStr += $"\nall thrusters: {thrusters.Count}";
-		errStr += $"\nrequired force: {(int)requiredThrustVec.Length()}N\n";*/
+		errStr = "";
+
 		totalEffectiveThrust = (float)calcTotalEffectiveThrust(activeThrusters);
 
-		//errStr += $"\n=======rotor=======";
-		//errStr += $"\nname: '{rotor.CustomName}'";
 		double angleCos = setFromVec(requiredThrustVec);
-		//errStr += $"\n-------rotor-------";
-
 
 		// the clipping value 'thrustModifier' defines how far the rotor can be away from the desired direction of thrust, and have the power still at max
 		// if 'thrustModifier' is at 1, the thruster will be at full desired power when it is at 90 degrees from the direction of travel
@@ -1430,11 +1423,17 @@ public class Nacelle {
 			// errStr += $"\nthruster '{thruster.theBlock.CustomName}': {thruster.errStr}\n";
 		}
 		// errStr += $"\n-------thrusters-------";
-		// errStr += $"\n-------Nacelle-------";
 		oldJetpack = jetpack;
 	}
 
-	public float calcTotalEffectiveThrust(IEnumerable<Thruster> thrusters) {
+	public void diag() {
+		program.write($"- Nacelle on {rotor.CustomName}");
+		program.write($"  Thrst: {availableThrusters.Count}/{thrusters.Count} upd: {detectThrustCounter}");
+		program.write($"  Required force: {requiredThrustVec.Length():N2}N");
+		program.write(errStr);
+	}
+
+	private float calcTotalEffectiveThrust(IEnumerable<Thruster> thrusters) {
 		float total = 0;
 		foreach(Thruster t in thrusters) {
 			total += t.theBlock.MaxEffectiveThrust;
@@ -1444,7 +1443,7 @@ public class Nacelle {
 
 	// This sets the rotor to face the desired direction in worldspace
 	// desiredVec must be in-line with the rotors plane of rotation
-	public double setFromVec(Vector3D desiredVec) {
+	private double setFromVec(Vector3D desiredVec) {
 		// The thrust direction of the current nacelle/rotor, in world space.
 		Vector3D currentDir = Vector3D.TransformNormal(direction, rotor.Top.WorldMatrix);
 		// The rotation axis of the current nacelle/rotor, in world space.
