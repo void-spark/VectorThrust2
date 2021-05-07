@@ -259,6 +259,11 @@ public long updateNacellesCount;
 
 string lastArg = "";
 
+// THE Issue: Any thruster(s) on a rotor when thrusting apply a torque that turns the thruster to face the center of gravity of the ship.
+// The more thrust, the stronger this force, and it can exceed the maximum torque that can be set on the rotor, at which point the nacelle
+// can no longer be controlled at all (before that, the nacelle might already see some adverse affects, turning slower/faster than intended).
+// The further away a thruster is from the center of mass (ignoring the axis of rotation of the rotor), the stronger the effect.
+// That is why building aligned with the center of mass helps, but since cargo affects the center of mass, this doesn't work well for cargo haulers.
 public void Main(string argument, UpdateType runType) {
 
 	if(argument.Length != 0) {
@@ -320,31 +325,42 @@ public void Main(string argument, UpdateType runType) {
 
 	// update thrusters on/off and re-check nacelles direction
 	// When we switch to/from fake zero-G grav I guess, which is usually near where atmospheric thrusters stop working?
-	bool gravChanged = Math.Abs(lastGrav - worldGravAccMag) > 0.05f; 
+	bool gravChanged = Math.Abs(lastGrav - worldGravAccMag) > 0.05f;
 	lastGrav = worldGravAccMag;
+	bool reGroupNacelles = false;
 	foreach(Nacelle n in nacelles) {
 		// we want to update if the thrusters are not valid, or atmosphere has changed
 		if(!n.validateThrusters(jetpack) || gravChanged) {
 			n.detectThrustDirection();
+			reGroupNacelles = true;
 		}
-		// Echo($"thrusters: {n.thrusters.Count}");
-		// Echo($"avaliable: {n.availableThrusters.Count}");
-		// Echo($"active: {n.activeThrusters.Count}");
+
+		// These are set by doPhysics
+		n.thrustModifierAbove = thrustModifierAbove;
+		n.thrustModifierBelow = thrustModifierBelow;
+
+		// This needs to be done all the time, because atmospheric thrusters vary with atmosphere density, which changes with height.
+		n.calcMaxEffectiveThrust();
 	}
 
 	// We expect any rotor to be aligned with one of the ships primary axes.
 	// Otherwise solving becomes far harder (and it's hard enough already!).
 	// So stick rotors on rotors or hinges, and you get what you deserve.
 
-	// Group nacelles among the 3 primary axes.
-	Dictionary<Base6Directions.Axis, List<Nacelle>> nacelleGroups = new Dictionary<Base6Directions.Axis, List<Nacelle>>();
-	foreach(Nacelle nacelle in nacelles) {
-		Vector3D rotorUpInShipSpace = Vector3D.TransformNormal(nacelle.rotor.WorldMatrix.Up, worldShipMatrix);
-		Base6Directions.Axis axis = Base6Directions.GetAxis(Base6Directions.GetDirection(rotorUpInShipSpace));
-		if(!nacelleGroups.ContainsKey(axis)) {
+// TODO: Doesn't regroup on %reset? Also breaking a thruster works in general, but fixing does not.
+	// We might want to do this more often if we want to support nacelles with mixed thruster types in different directions.
+	if(reGroupNacelles || (nacelleGroups.Count == 0 && nacelles.Count != 0)) {
+		// Create/reset the groups
+		foreach (Base6Directions.Axis axis in Enum.GetValues(typeof(Base6Directions.Axis))) {
 			nacelleGroups[axis] = new List<Nacelle>();
+		}		
+
+		// Group nacelles among the 3 primary axes.
+		foreach(Nacelle nacelle in nacelles) {
+			Vector3D rotorUpInShipSpace = Vector3D.TransformNormal(nacelle.rotor.WorldMatrix.Up, worldShipMatrix);
+			Base6Directions.Axis axis = Base6Directions.GetAxis(Base6Directions.GetDirection(rotorUpInShipSpace));
+			nacelleGroups[axis].Add(nacelle);
 		}
-		nacelleGroups[axis].Add(nacelle);
 	}
 
 	// The main solver, note that 'regular' thrusters are controlled by the game itself,
@@ -356,39 +372,49 @@ public void Main(string argument, UpdateType runType) {
 	// Also note that if the game misses (counter) thrust in one direction, it will not throttle down other
 	// directions to prevent drifting that way. This is also good, since we can then provide the needed counter thrust.
 
-	// Correct for misaligned nacelles
-	Vector3D asdf = Vector3D.Zero;
-	// 1. Set the thrust vector for each first nacelle in a group to the component of the required thrust vector which is in the operating plane of the nacelle.
-	//    And add the same vector to asdf.
-	foreach(List<Nacelle> g in nacelleGroups.Values) {
-		g[0].requiredThrustVec = requiredThrustVec.reject(g[0].rotor.WorldMatrix.Up);
-		asdf += g[0].requiredThrustVec;
+	// Put the groups in variables for easy access.
+	List<Nacelle> forwardBackwardGroup = nacelleGroups[Base6Directions.Axis.ForwardBackward];
+	List<Nacelle> leftRightGroup =  nacelleGroups[Base6Directions.Axis.LeftRight];
+	List<Nacelle> upDownGroup = nacelleGroups[Base6Directions.Axis.UpDown];
+
+	// Get the group sizes for scaling, because of phantom torque we want force spread evenly over each nacelle(rotor).
+	float forwardBackwardSize = forwardBackwardGroup.Count;
+	float leftRightSize = leftRightGroup.Count;
+	float upDownSize = upDownGroup.Count;
+
+	// The ? : here are to prevent division by zero if two groups are empty.
+	float xScaleUp = upDownSize == 0 ? 0 : upDownSize / (upDownSize + forwardBackwardSize);
+	float yScaleRight = leftRightSize == 0 ? 0 : leftRightSize / (leftRightSize + forwardBackwardSize);
+	float zScaleRight = leftRightSize == 0 ? 0 : leftRightSize / (leftRightSize + upDownSize);
+	Vector3D shipReqThrust = Vector3D.TransformNormal(requiredThrustVec, worldShipMatrix);
+
+	if(leftRightSize > 0) {
+		leftRightGroup[0].requiredThrustVec       = new Vector3D(                                 0 , shipReqThrust.Y *        yScaleRight , shipReqThrust.Z *        zScaleRight  );
 	}
-	// 2. Subtract the full required thrust vector off asdf.
-	//   For just one plane this would give any unaccounted requested thrust in the negative.
-	//   For multiple planes sharing an axes, which duplicates/multiplies the shared component, this gives the duplicated component in positive.
-	asdf -= requiredThrustVec;
-	// 3. Remove the shared component(s) from each first nacelle in each group.
-	foreach(List<Nacelle> g in nacelleGroups.Values) {
-		g[0].requiredThrustVec -= asdf;
+	if(upDownSize > 0) {
+		upDownGroup[0].requiredThrustVec          = new Vector3D( shipReqThrust.X *        xScaleUp ,                                    0 , shipReqThrust.Z * (1.0 - zScaleRight) );
 	}
-	// 4. Divide the shared component(s) by the amount of groups (TODO: yeah, not great for anything but 2 groups..)
-	asdf /= nacelleGroups.Count;
-	// 5. Add the scaled shared component to each group again.
-	foreach(List<Nacelle> g in nacelleGroups.Values) {
-		g[0].requiredThrustVec += asdf;
+	if(forwardBackwardSize > 0) {
+		forwardBackwardGroup[0].requiredThrustVec = new Vector3D( shipReqThrust.X * (1.0 - xScaleUp), shipReqThrust.Y * (1.0 - yScaleRight),                                    0  );
 	}
-	// Apply first nacelle settings to rest in each group, split evenly between the nacelles in the group.
+
+	// Apply first nacelle settings to rest in each group, split between the nacelles in the group based on available thrust.
 	double total = 0;
-	foreach(List<Nacelle> g in nacelleGroups.Values) {
-		Vector3D req = g[0].requiredThrustVec / g.Count;
-		for(int i = 0; i < g.Count; i++) {
-			g[i].requiredThrustVec = req;
-			g[i].thrustModifierAbove = thrustModifierAbove;
-			g[i].thrustModifierBelow = thrustModifierBelow;
-			g[i].go(jetpack);
-			//g[i].diag();
-			total += req.Length();
+	Vector3D totalVec = Vector3D.Zero;
+	foreach(Base6Directions.Axis axis in nacelleGroups.Keys) {
+		// write($"-- Group: {axis}");
+		List<Nacelle> g = nacelleGroups[axis];
+		if(g.Count == 0) {
+			continue;
+		}
+		Vector3D reqFull = Vector3D.TransformNormal(g[0].requiredThrustVec, shipWorldMatrix);
+		float groupMaxEffectiveThrust = g.Sum(n => n.maxEffectiveThrust);
+		foreach(Nacelle n in g) {
+			n.requiredThrustVec = (n.maxEffectiveThrust / groupMaxEffectiveThrust) * reqFull;
+			n.go(jetpack);
+			// n.diag();
+			total += n.requiredThrustVec.Length();
+			totalVec += n.requiredThrustVec;
 		}
 	}
 
@@ -428,6 +454,8 @@ public IMyShipController mainController = null;
 public List<IMyShipController> controllers = new List<IMyShipController>();
 public List<IMyShipController> usableControllers = new List<IMyShipController>();
 public List<Nacelle> nacelles = new List<Nacelle>();
+public Dictionary<Base6Directions.Axis, List<Nacelle>> nacelleGroups = new Dictionary<Base6Directions.Axis, List<Nacelle>>();
+
 public List<IMyThrust> normalThrusters = new List<IMyThrust>();
 public List<IMyTextPanel> screens = new List<IMyTextPanel>();
 public List<IMyTextPanel> usableScreens = new List<IMyTextPanel>();
@@ -1356,7 +1384,7 @@ public class Nacelle {
 	private bool oldJetpack = true;
 	public Vector3D requiredThrustVec = Vector3D.Zero;
 
-	private float totalEffectiveThrust = 0;
+	public float maxEffectiveThrust = 0.0f;
 	private int detectThrustCounter = 0;
 
 	public Nacelle(IMyMotorStator rotor, float maxRotorRPM, Program program) {
@@ -1379,7 +1407,6 @@ public class Nacelle {
 	public void go(bool jetpack) {
 		errStr = "";
 
-		totalEffectiveThrust = (float)calcTotalEffectiveThrust(activeThrusters);
 
 		double angleCos = setFromVec(requiredThrustVec);
 
@@ -1406,7 +1433,7 @@ public class Nacelle {
 		// errStr += $"\n=======thrusters=======";
 		foreach(Thruster thruster in activeThrusters) {
 			// errStr += thrustOffset.progressBar();
-			Vector3D thrust = thrustOffset * requiredThrustVec * thruster.theBlock.MaxEffectiveThrust / totalEffectiveThrust;
+			Vector3D thrust = thrustOffset * requiredThrustVec * thruster.theBlock.MaxEffectiveThrust / maxEffectiveThrust;
 			bool noThrust = thrust.LengthSquared() < 0.001f;
 			if(!jetpack || !program.thrustOn || noThrust) {
 				thruster.setThrust(0);
@@ -1428,17 +1455,13 @@ public class Nacelle {
 
 	public void diag() {
 		program.write($"- Nacelle on {rotor.CustomName}");
-		program.write($"  Thrst: {availableThrusters.Count}/{thrusters.Count} upd: {detectThrustCounter}");
-		program.write($"  Required force: {requiredThrustVec.Length():N2}N");
+		program.write($"  Thrst: {activeThrusters.Count}/{availableThrusters.Count}/{thrusters.Count} upd: {detectThrustCounter}");
+		program.write($"  Required force: {requiredThrustVec.Length():N2}N / {maxEffectiveThrust:N2}N");
 		program.write(errStr);
 	}
 
-	private float calcTotalEffectiveThrust(IEnumerable<Thruster> thrusters) {
-		float total = 0;
-		foreach(Thruster t in thrusters) {
-			total += t.theBlock.MaxEffectiveThrust;
-		}
-		return total;
+	public void calcMaxEffectiveThrust() {
+		maxEffectiveThrust = activeThrusters.Sum(t => t.theBlock.MaxEffectiveThrust);
 	}
 
 	// This sets the rotor to face the desired direction in worldspace
