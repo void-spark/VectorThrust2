@@ -438,66 +438,63 @@ public void Main(string argument, UpdateType runType) {
 }
 
 
-public string surfaceProviderErrorStr = "";
+string surfaceProviderErrorStr = "";
 
-public int accelExponent = 0;
+int accelExponent = 0;
 
-public bool jetpackIsPressed = false;
-public bool dampenersIsPressed = false;
-public bool cruiseIsPressed = false;
-public bool plusIsPressed = false;
-public bool minusIsPressed = false;
+bool jetpackIsPressed = false;
+bool dampenersIsPressed = false;
+bool cruiseIsPressed = false;
+bool plusIsPressed = false;
+bool minusIsPressed = false;
 
-public bool globalAppend = false;
+bool globalAppend = false;
 
-public IMyShipController mainController = null;
-public List<IMyShipController> controllers = new List<IMyShipController>();
-public List<IMyShipController> usableControllers = new List<IMyShipController>();
-public List<Nacelle> nacelles = new List<Nacelle>();
-public Dictionary<Base6Directions.Axis, List<Nacelle>> nacelleGroups = new Dictionary<Base6Directions.Axis, List<Nacelle>>();
+IMyShipController mainController = null;
+List<IMyShipController> controllers = new List<IMyShipController>();
+List<IMyShipController> usableControllers = new List<IMyShipController>();
+List<Nacelle> nacelles = new List<Nacelle>();
+Dictionary<Base6Directions.Axis, List<Nacelle>> nacelleGroups = new Dictionary<Base6Directions.Axis, List<Nacelle>>();
 
-public List<IMyThrust> normalThrusters = new List<IMyThrust>();
-public List<IMyTextPanel> screens = new List<IMyTextPanel>();
-public List<IMyTextPanel> usableScreens = new List<IMyTextPanel>();
-public HashSet<IMyTextSurface> surfaces = new HashSet<IMyTextSurface>();
-public List<IMyProgrammableBlock> programBlocks = new List<IMyProgrammableBlock>();
+List<IMyThrust> normalThrusters = new List<IMyThrust>();
+List<IMyTextPanel> screens = new List<IMyTextPanel>();
+List<IMyTextPanel> usableScreens = new List<IMyTextPanel>();
+HashSet<IMyTextSurface> surfaces = new HashSet<IMyTextSurface>();
 
-public float oldMass = 0;
+float oldMass = 0;
 
-public int rotorCount = 0;
-public int rotorTopCount = 0;
-public int thrusterCount = 0;
-public int screenCount = 0;
-public int programBlockCount = 0;
+int rotorCount = 0;
+int rotorTopCount = 0;
+int thrusterCount = 0;
+int screenCount = 0;
 
+bool standby = startInStandby;
+double thrustModifierAbove = 0.1;// how close the rotor has to be to target position before the thruster gets to full power
+double thrustModifierBelow = 0.1;// how close the rotor has to be to opposite of target position before the thruster gets to 0 power
 
-public bool standby = startInStandby;
-public double thrustModifierAbove = 0.1;// how close the rotor has to be to target position before the thruster gets to full power
-public double thrustModifierBelow = 0.1;// how close the rotor has to be to opposite of target position before the thruster gets to 0 power
+bool justCompiled = true;
+bool goToStandby = false;
+bool comeFromStandby = false;
 
-public bool justCompiled = true;
-public bool goToStandby = false;
-public bool comeFromStandby = false;
+const string tag = activeSurround + myName + activeSurround;
+const string offtag = standbySurround + myName + standbySurround;
 
-public const string tag = activeSurround + myName + activeSurround;
-public const string offtag = standbySurround + myName + standbySurround;
-
-public bool applyTags = false;
-public bool removeTags = false;
-public bool greedy = true;
-public float lastGrav = -1;
+bool applyTags = false;
+bool removeTags = false;
+bool greedy = true;
+float lastGrav = -1;
 public bool thrustOn = false;
 
-public Dictionary<string, object> CMinputs = null;
+Dictionary<string, object> CMinputs = null;
 
-public bool doStartup(string argument, UpdateType runType) {
+bool doStartup(string argument, UpdateType runType) {
 	globalAppend = false;
 
 	programCounter++;
 	Echo($"Last Runtime {Runtime.LastRunTimeMs:N2}ms #{programCounter}");
 	write($"{"|\\-/"[(int)programCounter/10%4]} {Runtime.LastRunTimeMs:N0}ms");
 
-	Echo($"Greedy: {this.greedy}");
+	Echo($"Greedy: {greedy}");
 
 	bool anyArg = Array.Exists(allArgs, arg => isArg(argument, arg));
 
@@ -523,23 +520,23 @@ public bool doStartup(string argument, UpdateType runType) {
 
 
 	//tags and getting blocks
-	this.applyTags = isArg(argument, applyTagsArg);
-	this.removeTags = !this.applyTags && isArg(argument, removeTagsArg);
+	applyTags = isArg(argument, applyTagsArg);
+	removeTags = !applyTags && isArg(argument, removeTagsArg);
 	// switch on: removeTags
 	// switch off: applyTags
-	this.greedy = (!this.applyTags && this.greedy) || this.removeTags;
-	// this automatically calls getNacelles() as needed, and passes in previous GTS data
-	if(this.applyTags) {
+	greedy = (!applyTags && greedy) || removeTags;
+	if(applyTags) {
 		addTag(Me);
-	} else if(this.removeTags) {
+	} else if(removeTags) {
 		removeTag(Me);
 	}
+	// this automatically calls getNacelles() as needed, and passes in previous GridTerminalSystem data
 	if(!checkNacelles()) {
 		Echo("Setup failed, stopping.");
 		return false;
 	}
-	this.applyTags = false;
-	this.removeTags = false;
+	applyTags = false;
+	removeTags = false;
 
 
 
@@ -568,7 +565,7 @@ public bool doStartup(string argument, UpdateType runType) {
 	return true;
 }
 
-public void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipPhysicalMass, out float worldGravAccMag, out Vector3D requiredThrustVec) {
+void doPhysics(Vector3D desiredVec, out Vector3D shipVel, out float shipPhysicalMass, out float worldGravAccMag, out Vector3D requiredThrustVec) {
 
  	// Get gravity in world space, gravity is measured as acceleration in m/s^2.
 	Vector3D worldGravAcc = usableControllers[0].GetNaturalGravity();
@@ -662,11 +659,11 @@ public static String formatVec(ref Vector3D vec) {
 	return $"X:{vec.X,11:N2} Y:{vec.Y,11:N2} Z:{vec.Z,11:N2}";
 }
 
-public bool isArg(string argument, string toCheck) {
+bool isArg(string argument, string toCheck) {
 	return argument.ToLower().Contains(toCheck.ToLower());
 }
 
-public void enterStandby() {
+void enterStandby() {
 	standby = true;
 	goToStandby = false;
 
@@ -693,7 +690,7 @@ public void enterStandby() {
 	write("Standing By");
 }
 
-public void exitStandby() {
+void exitStandby() {
 	standby = false;
 	comeFromStandby = false;
 
@@ -721,11 +718,11 @@ public void exitStandby() {
 	Echo("Resuming from standby");
 }
 
-public bool hasTag(IMyTerminalBlock block) {
+bool hasTag(IMyTerminalBlock block) {
 	return block.CustomName.Contains(tag) || block.CustomName.Contains(offtag);
 }
 
-public void addTag(IMyTerminalBlock block) {
+void addTag(IMyTerminalBlock block) {
 	string name = block.CustomName;
 
 	if(name.Contains(tag)) {
@@ -752,16 +749,16 @@ public void addTag(IMyTerminalBlock block) {
 
 }
 
-public void removeTag(IMyTerminalBlock block) {
+void removeTag(IMyTerminalBlock block) {
 	block.CustomName = block.CustomName.Replace(tag, "").Trim();
 	block.CustomName = block.CustomName.Replace(offtag, "").Trim();
 }
 
-public void standbyTag(IMyTerminalBlock block) {
+void standbyTag(IMyTerminalBlock block) {
 	block.CustomName = block.CustomName.Replace(tag, offtag);
 }
 
-public void activeTag(IMyTerminalBlock block) {
+void activeTag(IMyTerminalBlock block) {
 	block.CustomName = block.CustomName.Replace(offtag, tag);
 }
 
@@ -769,34 +766,30 @@ public void activeTag(IMyTerminalBlock block) {
 // true: only main cockpit can be used even if there is no one in the main cockpit
 // false: any cockpits can be used, but if there is someone in the main cockpit, it will only obey the main cockpit
 // no main cockpit: any cockpits can be used
-public bool onlyMain() {
+bool onlyMain() {
 	return mainController != null && (mainController.IsUnderControl || onlyMainCockpit);
 }
 
-public void getScreens() {
-	getScreens(this.screens);
+void getScreens() {
+	getScreens(screens);
 }
 
-public void getScreens(List<IMyTextPanel> screens) {
-	bool greedy = this.greedy || this.applyTags || this.removeTags;
-	this.screens = screens;
+void getScreens(List<IMyTextPanel> newScreens) {
+	screens = newScreens;
 	usableScreens.Clear();
 	foreach(IMyTextPanel screen in screens) {
-		bool continue_ = false;
-
-		if(this.removeTags) {
+		if(removeTags) {
 			removeTag(screen);
 		}
 
-		if(!greedy && !hasTag(screen)) { continue_ = true; }
-		if(!screen.IsWorking) continue_ = true;
-		if(!hasTag(screen) && !screen.CustomName.ToLower().Contains(LCDName.ToLower())) continue_ = true;
-
-		if(continue_) {
+		bool actGreedy = greedy || applyTags || removeTags;
+		if ( (!actGreedy && !hasTag(screen)) ||
+			(!screen.IsWorking) ||
+			(!hasTag(screen) && !screen.CustomName.ToLower().Contains(LCDName.ToLower())) ) {
 			surfaces.Remove(screen);
 			continue;
 		}
-		if(this.applyTags) {
+		if(applyTags) {
 			addTag(screen);
 		}
 		usableScreens.Add(screen);
@@ -820,17 +813,17 @@ public void write(string str) {
 
 float getAccelerationMul() {
 	// Look through boosts, applies acceleration of first one found. If none found or boosts not enabled, go for normal accel
-	int boostIndex = useBoosts && this.controlModule ? Array.FindIndex(this.boosts, boost => this.CMinputs.ContainsKey(boost.Key)) : -1;
+	int boostIndex = useBoosts && this.controlModule ? Array.FindIndex(this.boosts, boost => CMinputs.ContainsKey(boost.Key)) : -1;
 	float accel = boostIndex != -1 ? this.boosts[boostIndex].Value : (float)Math.Pow(accelBase, accelExponent);
 	return accel * defaultAccel;
 }
 
-public Vector3D getMovementInput(string arg) {
+Vector3D getMovementInput(string arg) {
 	if(controlModule) {
 		// setup control module
 		Dictionary<string, object> inputs = new Dictionary<string, object>();
 		try {
-			this.CMinputs = Me.GetValue<Dictionary<string, object>>("ControlModule.Inputs");
+			CMinputs = Me.GetValue<Dictionary<string, object>>("ControlModule.Inputs");
 			Me.SetValue<string>("ControlModule.AddInput", "all");
 			Me.SetValue<bool>("ControlModule.RunOnInput", true);
 			Me.SetValue<int>("ControlModule.InputState", 1);
@@ -842,48 +835,48 @@ public Vector3D getMovementInput(string arg) {
 
 	if(controlModule) {
 		// non-movement controls
-		if(this.CMinputs.ContainsKey(dampenersButton) && !dampenersIsPressed) {//inertia dampener key
+		if(CMinputs.ContainsKey(dampenersButton) && !dampenersIsPressed) {//inertia dampener key
 			dampeners = !dampeners;//toggle
 			dampenersIsPressed = true;
 		}
-		if(!this.CMinputs.ContainsKey(dampenersButton)) {
+		if(!CMinputs.ContainsKey(dampenersButton)) {
 			dampenersIsPressed = false;
 		}
 
 
-		if(this.CMinputs.ContainsKey(cruiseButton) && !cruiseIsPressed) {//cruise key
+		if(CMinputs.ContainsKey(cruiseButton) && !cruiseIsPressed) {//cruise key
 			cruise = !cruise;//toggle
 			cruiseIsPressed = true;
 		}
-		if(!this.CMinputs.ContainsKey(cruiseButton)) {
+		if(!CMinputs.ContainsKey(cruiseButton)) {
 			cruiseIsPressed = false;
 		}
 
-		if(this.CMinputs.ContainsKey(jetpackButton) && !jetpackIsPressed) {//jetpack key
+		if(CMinputs.ContainsKey(jetpackButton) && !jetpackIsPressed) {//jetpack key
 			jetpack = !jetpack;//toggle
 			jetpackIsPressed = true;
 		}
-		if(!this.CMinputs.ContainsKey(jetpackButton)) {
+		if(!CMinputs.ContainsKey(jetpackButton)) {
 			jetpackIsPressed = false;
 		}
 
-		if(this.CMinputs.ContainsKey(raiseAccel) && !plusIsPressed) {//throttle up
+		if(CMinputs.ContainsKey(raiseAccel) && !plusIsPressed) {//throttle up
 			accelExponent++;
 			plusIsPressed = true;
 		}
-		if(!this.CMinputs.ContainsKey(raiseAccel)) { //increase target acceleration
+		if(!CMinputs.ContainsKey(raiseAccel)) { //increase target acceleration
 			plusIsPressed = false;
 		}
 
-		if(this.CMinputs.ContainsKey(lowerAccel) && !minusIsPressed) {//throttle down
+		if(CMinputs.ContainsKey(lowerAccel) && !minusIsPressed) {//throttle down
 			accelExponent--;
 			minusIsPressed = true;
 		}
-		if(!this.CMinputs.ContainsKey(lowerAccel)) { //lower target acceleration
+		if(!CMinputs.ContainsKey(lowerAccel)) { //lower target acceleration
 			minusIsPressed = false;
 		}
 
-		if(this.CMinputs.ContainsKey(resetAccel)) { //default target acceleration
+		if(CMinputs.ContainsKey(resetAccel)) { //default target acceleration
 			accelExponent = 0;
 		}
 
@@ -966,10 +959,10 @@ public Vector3D getMovementInput(string arg) {
 }
 
 void removeSurface(IMyTextSurface surface) {
-	if(this.surfaces.Contains(surface)) {
+	if(surfaces.Contains(surface)) {
 		//need to check this, because otherwise it will reset panels
 		//we aren't controlling
-		this.surfaces.Remove(surface);
+		surfaces.Remove(surface);
 		surface.ContentType = ContentType.NONE;
 		surface.WriteText("", false);
 	}
@@ -1051,7 +1044,7 @@ bool addSurfaceProvider(IMyTerminalBlock block) {
 
 	for(int i = 0; i < to_add.Length; i++) {
 		if(to_add[i]) {
-			this.surfaces.Add(provider.GetSurface(i));
+			surfaces.Add(provider.GetSurface(i));
 		} else {
 			removeSurface(provider.GetSurface(i));
 		}
@@ -1062,17 +1055,17 @@ bool addSurfaceProvider(IMyTerminalBlock block) {
 }
 
 bool getControllers() {
-	return getControllers(this.controllers);
+	return getControllers(controllers);
 }
 
 bool getControllers(List<IMyShipController> blocks) {
-	bool greedy = this.greedy || this.applyTags || this.removeTags;
 	mainController = null;
-	this.controllers = blocks;
+	controllers = blocks;
 
 	usableControllers.Clear();
 
 	string reason = "";
+	bool actGreedy = greedy || applyTags || removeTags;
 	for(int i = 0; i < blocks.Count; i++) {
 		bool canAdd = true;
 		string currreason = blocks[i].CustomName + "\n";
@@ -1091,18 +1084,18 @@ bool getControllers(List<IMyShipController> blocks) {
 		if(blocks[i].IsMainCockpit) {
 			mainController = blocks[i];
 		}
-		if(!(greedy || hasTag(blocks[i]))) {
+		if(!(actGreedy || hasTag(blocks[i]))) {
 			currreason += "  Doesn't match my tag\n";
 			canAdd = false;
 		}
-		if(this.removeTags) {
+		if(removeTags) {
 			removeTag(blocks[i]);
 		}
 
 		if(canAdd) {
 			addSurfaceProvider(blocks[i]);
 			usableControllers.Add(blocks[i]);
-			if(this.applyTags) {
+			if(applyTags) {
 				addTag(blocks[i]);
 			}
 		} else {
@@ -1124,7 +1117,7 @@ bool getControllers(List<IMyShipController> blocks) {
 	return true;
 }
 
-public IMyShipController findACockpit() {
+IMyShipController findACockpit() {
 	foreach(IMyShipController cont in usableControllers) {
 		if(cont.IsWorking) {
 			return cont;
@@ -1135,17 +1128,17 @@ public IMyShipController findACockpit() {
 }
 
 // checks to see if the nacelles have changed
-public bool checkNacelles() {
+bool checkNacelles() {
 	Echo("Checking Nacelles..");
 
-	bool greedy = this.applyTags || this.removeTags;
+	bool actGreedy = applyTags || removeTags;
 
 	IMyShipController cont = findACockpit();
 	if(cont == null) {
 		Echo("No cockpit registered, checking everything.");
-	} else if(!greedy) {
+	} else if(!actGreedy) {
 		float shipBaseMass = cont.CalculateShipMass().BaseMass;
-		if(this.oldMass == shipBaseMass) {
+		if(oldMass == shipBaseMass) {
 			Echo("Mass is the same, everything is good.");
 
 			// they may have changed the screen name to be a VT one
@@ -1154,9 +1147,9 @@ public bool checkNacelles() {
 			return true;
 		}
 		Echo("Mass is different, checking everything.");
-		this.oldMass = shipBaseMass;
+		oldMass = shipBaseMass;
 		// surface may be exploded if mass changes, in this case, ghost surfaces my be left behind
-		this.surfaces.Clear();
+		surfaces.Clear();
 	}
 
 	List<IMyShipController> conts = new List<IMyShipController>();
@@ -1181,9 +1174,6 @@ public bool checkNacelles() {
 			if(blocks[i] is IMyTextPanel) {
 				txts.Add((IMyTextPanel)blocks[i]);
 			}
-			if(blocks[i] is IMyProgrammableBlock) {
-				programBlocks.Add((IMyProgrammableBlock)blocks[i]);
-			}
 		}
 	}
 
@@ -1204,7 +1194,7 @@ public bool checkNacelles() {
 		}
 	}
 
-	if(screenCount != txts.Count || greedy) {
+	if(screenCount != txts.Count || actGreedy) {
 		Echo($"Screen count ({screenCount}) is out of whack (current: {txts.Count})");
 		getScreens(txts);
 	} else {
@@ -1239,7 +1229,7 @@ public bool checkNacelles() {
 	}
 
 
-	if(updateNacelles || greedy) {
+	if(updateNacelles || actGreedy) {
 		Echo("Updating Nacelles");
 		getNacelles(rots, thrs);
 	} else {
@@ -1271,7 +1261,7 @@ public bool init() {
 void getNacelles() {
 	var blocks = new List<IMyTerminalBlock>();
 
-	// 1 call to GTS
+	// 1 call to GridTerminalSystem
 	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => (block is IMyThrust) || (block is IMyMotorStator));
 
 	Echo("Getting Blocks for thrusters & rotors");
@@ -1292,27 +1282,24 @@ void getNacelles() {
 
 	getNacelles(rotors, normalThrusters);
 }
+
 void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
-	bool greedy = this.applyTags || this.removeTags || this.greedy;
+	bool actGreedy = greedy || applyTags || removeTags;
 	gotNacellesCount++;
-	this.nacelles.Clear();
-
-
-
-
+	nacelles.Clear();
 
 	Echo("Getting Rotors");
 	// make this.nacelles out of all valid rotors
 	rotorTopCount = 0;
 	foreach(IMyMotorStator current in rotors) {
-		if(this.removeTags) {
+		if(removeTags) {
 			removeTag(current);
-		} else if(this.applyTags) {
+		} else if(applyTags) {
 			addTag(current);
 		}
 
 
-		if(!(greedy || hasTag(current))) { continue; }
+		if(!(actGreedy || hasTag(current))) { continue; }
 
 		if(current.Top == null) {
 			continue;
@@ -1327,37 +1314,37 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 
 		// it's not set to not be a nacelle rotor
 		// it's topgrid is not the programmable blocks grid
-		this.nacelles.Add(new Nacelle(current, maxRotorRPM, this));
+		nacelles.Add(new Nacelle(current, maxRotorRPM, this));
 	}
 
 	Echo("Getting Thrusters");
-	// add all thrusters to their corresponding nacelle and remove this.nacelles that have none
-	for(int i = this.nacelles.Count-1; i >= 0; i--) {
+	// add all thrusters to their corresponding nacelle and remove nacelles that have none
+	for(int i = nacelles.Count-1; i >= 0; i--) {
 		for(int j = thrusters.Count-1; j >= 0; j--) {
-			if(!(greedy || hasTag(thrusters[j]))) { continue; }
-			if(this.removeTags) {
+			if(!(actGreedy || hasTag(thrusters[j]))) { continue; }
+			if(removeTags) {
 				removeTag(thrusters[j]);
 			}
 
-			if(thrusters[j].CubeGrid != this.nacelles[i].rotor.TopGrid) continue;// thruster is not for the current nacelle
+			if(thrusters[j].CubeGrid != nacelles[i].rotor.TopGrid) continue;// thruster is not for the current nacelle
 			// if(!thrusters[j].IsFunctional) continue;// broken, don't add it
 
-			if(this.applyTags) {
+			if(applyTags) {
 				addTag(thrusters[j]);
 			}
 
-			this.nacelles[i].thrusters.Add(new Thruster(thrusters[j]));
+			nacelles[i].thrusters.Add(new Thruster(thrusters[j]));
 			thrusters.RemoveAt(j);// shorten the list we have to check
 		}
-		// remove this.nacelles (rotors) without thrusters
-		if(this.nacelles[i].thrusters.Count == 0) {
-			removeTag(this.nacelles[i].rotor);
-			this.nacelles.RemoveAt(i);// there is no more reference to the rotor, should be garbage collected
+		// remove nacelles (rotors) without thrusters
+		if(nacelles[i].thrusters.Count == 0) {
+			removeTag(nacelles[i].rotor);
+			nacelles.RemoveAt(i);// there is no more reference to the rotor, should be garbage collected
 			continue;
 		}
 		// if its still there, setup the nacelle
-		this.nacelles[i].validateThrusters(jetpack);
-		this.nacelles[i].detectThrustDirection();
+		nacelles[i].validateThrusters(jetpack);
+		nacelles[i].detectThrustDirection();
 	}
 
 }
@@ -1607,7 +1594,7 @@ public class Nacelle {
 
 public class Thruster : BlockWrapper<IMyThrust> {
 
-	// stays the same when in standby, if not in standby, this gets updated to weather or not the thruster is on
+	// stays the same when in standby, if not in standby, this gets updated to wether or not the thruster is on
 	public bool IsOn;
 
 	// these 2 indicate the thruster was turned off from the script, and should be kept in the active list
