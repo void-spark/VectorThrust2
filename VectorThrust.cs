@@ -347,7 +347,6 @@ public void Main(string argument, UpdateType runType) {
 	// Otherwise solving becomes far harder (and it's hard enough already!).
 	// So stick rotors on rotors or hinges, and you get what you deserve.
 
-// TODO: Doesn't regroup on %reset? Also breaking a thruster works in general, but fixing does not.
 	// We might want to do this more often if we want to support nacelles with mixed thruster types in different directions.
 	if(reGroupNacelles || (nacelleGroups.Count == 0 && nacelles.Count != 0)) {
 		// Create/reset the groups
@@ -439,13 +438,13 @@ bool minusIsPressed = false;
 bool globalAppend = false;
 
 IMyShipController mainController = null;
-List<IMyShipController> controllers = new List<IMyShipController>();
+List<IMyShipController> allControllers = new List<IMyShipController>();
 List<IMyShipController> usableControllers = new List<IMyShipController>();
 List<Nacelle> nacelles = new List<Nacelle>();
 Dictionary<Base6Directions.Axis, List<Nacelle>> nacelleGroups = new Dictionary<Base6Directions.Axis, List<Nacelle>>();
 
 List<IMyThrust> normalThrusters = new List<IMyThrust>();
-List<IMyTextPanel> screens = new List<IMyTextPanel>();
+List<IMyTextPanel> allScreens = new List<IMyTextPanel>();
 List<IMyTextPanel> usableScreens = new List<IMyTextPanel>();
 HashSet<IMyTextSurface> surfaces = new HashSet<IMyTextSurface>();
 
@@ -454,7 +453,6 @@ float oldMass = 0;
 int rotorCount = 0;
 int rotorTopCount = 0;
 int thrusterCount = 0;
-int screenCount = 0;
 
 bool standby = startInStandby;
 double thrustModifierAbove = 0.1;// how close the rotor has to be to target position before the thruster gets to full power
@@ -499,13 +497,17 @@ bool doStartup(string argument, UpdateType runType) {
 		Echo("Normal Running");
 	}
 
-	if(justCompiled || controllers.Count == 0 || isArg(argument, resetArg)) {
-		if(!init()) {
+	if(justCompiled || allControllers.Count == 0 || isArg(argument, resetArg)) {
+		Echo("Initialising..");
+		getNacelles();
+		List<IMyShipController> conts = new List<IMyShipController>();
+		GridTerminalSystem.GetBlocksOfType<IMyShipController>(conts);
+		if(!getControllers(conts)) {
+			Echo("Init failed.");
 			return false;
 		}
+		Echo("Init success.");
 	}
-
-
 
 	//tags and getting blocks
 	applyTags = isArg(argument, applyTagsArg);
@@ -759,13 +761,13 @@ bool onlyMain() {
 }
 
 void getScreens() {
-	getScreens(screens);
+	getScreens(allScreens);
 }
 
 void getScreens(List<IMyTextPanel> newScreens) {
-	screens = newScreens;
+	allScreens = newScreens;
 	usableScreens.Clear();
-	foreach(IMyTextPanel screen in screens) {
+	foreach(IMyTextPanel screen in allScreens) {
 		if(removeTags) {
 			removeTag(screen);
 		}
@@ -783,7 +785,6 @@ void getScreens(List<IMyTextPanel> newScreens) {
 		usableScreens.Add(screen);
 		surfaces.Add(screen);
 	}
-	screenCount = screens.Count;
 }
 
 public void write(string str) {
@@ -1043,51 +1044,51 @@ bool addSurfaceProvider(IMyTerminalBlock block) {
 }
 
 bool getControllers() {
-	return getControllers(controllers);
+	return getControllers(allControllers);
 }
 
 bool getControllers(List<IMyShipController> blocks) {
 	mainController = null;
-	controllers = blocks;
+	allControllers = blocks;
 
 	usableControllers.Clear();
 
 	string reason = "";
 	bool actGreedy = greedy || applyTags || removeTags;
-	for(int i = 0; i < blocks.Count; i++) {
+	foreach(IMyShipController block in blocks) {
 		bool canAdd = true;
-		string currreason = blocks[i].CustomName + "\n";
-		if(!blocks[i].ShowInTerminal && ignoreHiddenBlocks) {
+		string currreason = block.CustomName + "\n";
+		if(!block.ShowInTerminal && ignoreHiddenBlocks) {
 			currreason += "  ShowInTerminal not set\n";
 			canAdd = false;
 		}
-		if(!blocks[i].CanControlShip) {
+		if(!block.CanControlShip) {
 			currreason += "  CanControlShip not set\n";
 			canAdd = false;
 		}
-		if(!blocks[i].ControlThrusters) {
+		if(!block.ControlThrusters) {
 			currreason += "  can't ControlThrusters\n";
 			canAdd = false;
 		}
-		if(blocks[i].IsMainCockpit) {
-			mainController = blocks[i];
+		if(block.IsMainCockpit) {
+			mainController = block;
 		}
-		if(!(actGreedy || hasTag(blocks[i]))) {
+		if(!(actGreedy || hasTag(block))) {
 			currreason += "  Doesn't match my tag\n";
 			canAdd = false;
 		}
 		if(removeTags) {
-			removeTag(blocks[i]);
+			removeTag(block);
 		}
 
 		if(canAdd) {
-			addSurfaceProvider(blocks[i]);
-			usableControllers.Add(blocks[i]);
+			addSurfaceProvider(block);
+			usableControllers.Add(block);
 			if(applyTags) {
-				addTag(blocks[i]);
+				addTag(block);
 			}
 		} else {
-			removeSurfaceProvider(blocks[i]);
+			removeSurfaceProvider(block);
 			reason += currreason;
 		}
 	}
@@ -1101,7 +1102,6 @@ bool getControllers(List<IMyShipController> blocks) {
 		return false;
 	}
 
-	controllers = blocks;
 	return true;
 }
 
@@ -1144,24 +1144,26 @@ bool checkNacelles() {
 	List<IMyMotorStator> rots = new List<IMyMotorStator>();
 	List<IMyThrust> thrs = new List<IMyThrust>();
 	List<IMyTextPanel> txts = new List<IMyTextPanel>();
-	List<IMyProgrammableBlock> programBlocks = new List<IMyProgrammableBlock>();
 
-	if(true) {//artificial scope :)
-		List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
-		GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks);
-		for(int i = 0; i < blocks.Count; i++) {
-			if(blocks[i] is IMyShipController) {
-				conts.Add((IMyShipController)blocks[i]);
-			}
-			if(blocks[i] is IMyMotorStator) {
-				rots.Add((IMyMotorStator)blocks[i]);
-			}
-			if(blocks[i] is IMyThrust) {
-				thrs.Add((IMyThrust)blocks[i]);
-			}
-			if(blocks[i] is IMyTextPanel) {
-				txts.Add((IMyTextPanel)blocks[i]);
-			}
+	List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
+	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => 
+		block is IMyShipController || 
+		block is IMyMotorStator || 
+		block is IMyThrust || 
+		block is IMyTextPanel
+	);
+	foreach(IMyTerminalBlock block in blocks) {
+		if(block is IMyShipController) {
+			conts.Add((IMyShipController)block);
+		}
+		if(block is IMyMotorStator) {
+			rots.Add((IMyMotorStator)block);
+		}
+		if(block is IMyThrust) {
+			thrs.Add((IMyThrust)block);
+		}
+		if(block is IMyTextPanel) {
+			txts.Add((IMyTextPanel)block);
 		}
 	}
 
@@ -1175,23 +1177,19 @@ bool checkNacelles() {
 	bool updateNacelles = false;
 
 	// if you use the following if statement, it won't lock the non-main cockpit if someone sets the main cockpit, until a recompile or world load :/
-	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */controllers.Count != conts.Count || cont == null || greedy) {
-		Echo($"Controller count ({controllers.Count}) is out of whack (current: {conts.Count})");
+	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */allControllers.Count != conts.Count || cont == null || greedy) {
+		Echo($"Controller count ({allControllers.Count}) is out of whack (current: {conts.Count})");
 		if(!getControllers(conts)) {
 			return false;
 		}
 	}
 
-	if(screenCount != txts.Count || actGreedy) {
-		Echo($"Screen count ({screenCount}) is out of whack (current: {txts.Count})");
+	if(allScreens.Count != txts.Count || actGreedy) {
+		Echo($"Screen count ({allScreens.Count}) is out of whack (current: {txts.Count})");
 		getScreens(txts);
 	} else {
 		//probably may-aswell just getScreens either way. seems like there wouldn't be much performance hit
-		foreach(IMyTextPanel screen in txts) {
-			if(!screen.IsWorking) continue;
-			if(!screen.CustomName.ToLower().Contains(LCDName.ToLower())) continue;
-			getScreens(txts);
-		}
+		getScreens(txts);
 	}
 
 	if(rotorCount != rots.Count) {
@@ -1227,43 +1225,19 @@ bool checkNacelles() {
 	return true;
 }
 
-public bool init() {
-	Echo("Initialising..");
-	getNacelles();
-	List<IMyShipController> conts = new List<IMyShipController>();
-	GridTerminalSystem.GetBlocksOfType<IMyShipController>(conts);
-	if(!getControllers(conts)) {
-		Echo("Init failed.");
-		return false;
-	}
-	Echo("Init success.");
-	return true;
-}
-
-//addTag(IMyTerminalBlock block)
-//removeTag(IMyTerminalBlock block)
-//standbyTag(IMyTerminalBlock block)
-//activeTag(IMyTerminalBlock block)
-
 // gets all the rotors and thrusters
 void getNacelles() {
-	var blocks = new List<IMyTerminalBlock>();
-
-	// 1 call to GridTerminalSystem
-	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => (block is IMyThrust) || (block is IMyMotorStator));
-
-	Echo("Getting Blocks for thrusters & rotors");
-	// get the blocks we care about
 	var rotors = new List<IMyMotorStator>();
 	normalThrusters.Clear();
-	// var thrusters = new List<IMyThrust>();
-	for(int i = blocks.Count-1; i >= 0; i--) {
-		if(blocks[i] is IMyThrust) {
-			normalThrusters.Add((IMyThrust)blocks[i]);
-		} else /*if(blocks[i] is IMyMotorStator) */{
-			rotors.Add((IMyMotorStator)blocks[i]);
+
+	var blocks = new List<IMyTerminalBlock>();
+	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => (block is IMyThrust) || (block is IMyMotorStator));
+	foreach(IMyTerminalBlock block in blocks) {
+		if(block is IMyThrust) {
+			normalThrusters.Add((IMyThrust)block);
+		} else {
+			rotors.Add((IMyMotorStator)block);
 		}
-		blocks.RemoveAt(i);
 	}
 	rotorCount = rotors.Count;
 	thrusterCount = normalThrusters.Count;
