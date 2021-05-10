@@ -1177,7 +1177,7 @@ bool checkNacelles() {
 	bool updateNacelles = false;
 
 	// if you use the following if statement, it won't lock the non-main cockpit if someone sets the main cockpit, until a recompile or world load :/
-	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */allControllers.Count != conts.Count || cont == null || greedy) {
+	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */allControllers.Count != conts.Count || cont == null || actGreedy) {
 		Echo($"Controller count ({allControllers.Count}) is out of whack (current: {conts.Count})");
 		if(!getControllers(conts)) {
 			return false;
