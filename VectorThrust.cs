@@ -372,53 +372,41 @@ public void Main(string argument, UpdateType runType) {
 	// Also note that if the game misses (counter) thrust in one direction, it will not throttle down other
 	// directions to prevent drifting that way. This is also good, since we can then provide the needed counter thrust.
 
-	// Put the groups in variables for easy access.
-	List<Nacelle> forwardBackwardGroup = nacelleGroups[Base6Directions.Axis.ForwardBackward];
-	List<Nacelle> leftRightGroup =  nacelleGroups[Base6Directions.Axis.LeftRight];
-	List<Nacelle> upDownGroup = nacelleGroups[Base6Directions.Axis.UpDown];
-
 	// Get the group sizes for scaling, because of phantom torque we want force spread evenly over each nacelle(rotor).
-	float forwardBackwardSize = forwardBackwardGroup.Count;
-	float leftRightSize = leftRightGroup.Count;
-	float upDownSize = upDownGroup.Count;
+	float forwardBackwardSize = nacelleGroups[Base6Directions.Axis.ForwardBackward].Count;
+	float leftRightSize = nacelleGroups[Base6Directions.Axis.LeftRight].Count;
+	float upDownSize = nacelleGroups[Base6Directions.Axis.UpDown].Count;
 
 	// The ? : here are to prevent division by zero if two groups are empty.
 	float xScaleUp = upDownSize == 0 ? 0 : upDownSize / (upDownSize + forwardBackwardSize);
 	float yScaleRight = leftRightSize == 0 ? 0 : leftRightSize / (leftRightSize + forwardBackwardSize);
 	float zScaleRight = leftRightSize == 0 ? 0 : leftRightSize / (leftRightSize + upDownSize);
-	Vector3D shipReqThrust = Vector3D.TransformNormal(requiredThrustVec, worldShipMatrix);
 
-	if(leftRightSize > 0) {
-		leftRightGroup[0].requiredThrustVec       = new Vector3D(                                 0 , shipReqThrust.Y *        yScaleRight , shipReqThrust.Z *        zScaleRight  );
-	}
-	if(upDownSize > 0) {
-		upDownGroup[0].requiredThrustVec          = new Vector3D( shipReqThrust.X *        xScaleUp ,                                    0 , shipReqThrust.Z * (1.0 - zScaleRight) );
-	}
-	if(forwardBackwardSize > 0) {
-		forwardBackwardGroup[0].requiredThrustVec = new Vector3D( shipReqThrust.X * (1.0 - xScaleUp), shipReqThrust.Y * (1.0 - yScaleRight),                                    0  );
-	}
+	Vector3D reqThrustShipSpace = Vector3D.TransformNormal(requiredThrustVec, worldShipMatrix);
 
 	// Apply first nacelle settings to rest in each group, split between the nacelles in the group based on available thrust.
-	double total = 0;
-	Vector3D totalVec = Vector3D.Zero;
 	foreach(Base6Directions.Axis axis in nacelleGroups.Keys) {
 		// write($"-- Group: {axis}");
-		List<Nacelle> g = nacelleGroups[axis];
-		if(g.Count == 0) {
+		List<Nacelle> group = nacelleGroups[axis];
+		if(group.Count == 0) {
 			continue;
 		}
-		Vector3D reqFull = Vector3D.TransformNormal(g[0].requiredThrustVec, shipWorldMatrix);
-		float groupMaxEffectiveThrust = g.Sum(n => n.maxEffectiveThrust);
-		foreach(Nacelle n in g) {
+		Vector3D groupThrustVec;
+		if(axis == Base6Directions.Axis.ForwardBackward) {
+			groupThrustVec = new Vector3D(reqThrustShipSpace.X * (1.0 - xScaleUp), reqThrustShipSpace.Y * (1.0 - yScaleRight), 0);
+		} else if( axis == Base6Directions.Axis.LeftRight) {
+			groupThrustVec =  new Vector3D(0, reqThrustShipSpace.Y * yScaleRight, reqThrustShipSpace.Z * zScaleRight);
+		} else {
+			groupThrustVec = new Vector3D(reqThrustShipSpace.X * xScaleUp, 0, reqThrustShipSpace.Z * (1.0 - zScaleRight));
+		}
+		Vector3D reqFull = Vector3D.TransformNormal(groupThrustVec, shipWorldMatrix);
+		float groupMaxEffectiveThrust = group.Sum(n => n.maxEffectiveThrust);
+		foreach(Nacelle n in group) {
 			n.requiredThrustVec = (n.maxEffectiveThrust / groupMaxEffectiveThrust) * reqFull;
 			n.go(jetpack);
 			// n.diag();
-			total += n.requiredThrustVec.Length();
-			totalVec += n.requiredThrustVec;
 		}
 	}
-
-	Echo($"Total Force: {total:N0}N");
 
 
 	write($"Last cmd: {lastArg}");
@@ -1350,29 +1338,29 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 }
 
 public class Nacelle {
-	private String errStr;
-	private Program program;
+	String errStr;
+	Program program;
 
 	// physical parts
 	public IMyMotorStator rotor;
 	// Thrust direction in rotor top local space.
-	private Vector3D direction = Vector3D.Zero;
+	Vector3D direction = Vector3D.Zero;
 	// Max RPM allowed for rotor.
-	private float maxRPM;
+	float maxRPM;
 
 
 	public HashSet<Thruster> thrusters;// all the thrusters
-	private HashSet<Thruster> availableThrusters;// <= thrusters: the ones the user chooses to be used (ShowInTerminal)
-	private HashSet<Thruster> activeThrusters;// <= activeThrusters: the ones that are facing the direction that produces the most thrust (only recalculated if available thrusters changes)
+	HashSet<Thruster> availableThrusters;// <= thrusters: the ones the user chooses to be used (ShowInTerminal)
+	HashSet<Thruster> activeThrusters;// <= activeThrusters: the ones that are facing the direction that produces the most thrust (only recalculated if available thrusters changes)
 
 	public double thrustModifierAbove = 0.1;// how close the rotor has to be to target position before the thruster gets to full power
 	public double thrustModifierBelow = 0.1;// how close the rotor has to be to opposite of target position before the thruster gets to 0 power
 
-	private bool oldJetpack = true;
+	bool oldJetpack = true;
 	public Vector3D requiredThrustVec = Vector3D.Zero;
 
 	public float maxEffectiveThrust = 0.0f;
-	private int detectThrustCounter = 0;
+	int detectThrustCounter = 0;
 
 	public Nacelle(IMyMotorStator rotor, float maxRotorRPM, Program program) {
 		// don't want IMyMotorBase, that includes wheels
@@ -1384,9 +1372,9 @@ public class Nacelle {
 		} else {
 			maxRPM = maxRotorRPM;
 		}
-		this.thrusters = new HashSet<Thruster>();
-		this.availableThrusters = new HashSet<Thruster>();
-		this.activeThrusters = new HashSet<Thruster>();
+		thrusters = new HashSet<Thruster>();
+		availableThrusters = new HashSet<Thruster>();
+		activeThrusters = new HashSet<Thruster>();
 		errStr = "";
 	}
 
@@ -1394,34 +1382,44 @@ public class Nacelle {
 	public void go(bool jetpack) {
 		errStr = "";
 
+		// Adjust the rotor angle by setting it's speed, returns the current angle.
+		double angleCos = updateRotorVelocity();
+		updateThrustersThrust(jetpack, angleCos);
 
-		double angleCos = setFromVec(requiredThrustVec);
+		oldJetpack = jetpack;
+	}
 
+	public void diag() {
+		program.write($"- Nacelle on {rotor.CustomName}");
+		program.write($"  Thrst: {activeThrusters.Count}/{availableThrusters.Count}/{thrusters.Count} upd: {detectThrustCounter}");
+		program.write($"  Required force: {requiredThrustVec.Length():N2}N / {maxEffectiveThrust:N2}N");
+		program.write(errStr);
+	}
+
+	public void calcMaxEffectiveThrust() {
+		maxEffectiveThrust = activeThrusters.Sum(t => t.theBlock.MaxEffectiveThrust);
+	}
+
+	void updateThrustersThrust(bool jetpack, double angleCos) {
 		// the clipping value 'thrustModifier' defines how far the rotor can be away from the desired direction of thrust, and have the power still at max
 		// if 'thrustModifier' is at 1, the thruster will be at full desired power when it is at 90 degrees from the direction of travel
 		// if 'thrustModifier' is at 0, the thruster will only be at full desired power when it is exactly at the direction of travel, (it's never exactly in-line)
 		// double thrustOffset = (angleCos + 1) / (1 + (1 - Program.thrustModifierAbove));//put it in some graphing calculator software where 'angleCos' is cos(x) and adjust the thrustModifier value between 0 and 1, then you can visualise it
-		double abo = thrustModifierAbove;
-		double bel = thrustModifierBelow;
-		if(abo > 1) { abo = 1; }
-		if(abo < 0) { abo = 0; }
-		if(bel > 1) { bel = 1; }
-		if(bel < 0) { bel = 0; }
+		double abo = MathHelperD.Clamp(thrustModifierAbove, 0, 1);
+		double bel = MathHelperD.Clamp(thrustModifierBelow, 0, 1);
 		// put it in some graphing calculator software where 'angleCos' is cos(x) and adjust the thrustModifier values between 0 and 1, then you can visualise it
 		double thrustOffset = ((((angleCos + 1) * (1 + bel)) / 2) - bel) * (((angleCos + 1) * (1 + abo)) / 2);// the other one is simpler, but this one performs better
 		// double thrustOffset = (angleCos * (1 + abo) * (1 + bel) + abo - bel + 1) / 2;
-		if(thrustOffset > 1) {
-			thrustOffset = 1;
-		} else if(thrustOffset < 0) {
-			thrustOffset = 0;
-		}
+		thrustOffset = MathHelperD.Clamp(thrustOffset, 0, 1);
+		// Apply the offset
+		double offsetThrust = thrustOffset * requiredThrustVec.Length();
 
 		//set the thrust for each engine
 		// errStr += $"\n=======thrusters=======";
 		foreach(Thruster thruster in activeThrusters) {
 			// errStr += thrustOffset.progressBar();
-			Vector3D thrust = thrustOffset * requiredThrustVec * thruster.theBlock.MaxEffectiveThrust / maxEffectiveThrust;
-			bool noThrust = thrust.LengthSquared() < 0.001f;
+			double thrust = offsetThrust * thruster.theBlock.MaxEffectiveThrust / maxEffectiveThrust;
+			bool noThrust = thrust < 0.03f;
 			if(!jetpack || !program.thrustOn || noThrust) {
 				thruster.setThrust(0);
 				thruster.theBlock.Enabled = false;
@@ -1437,29 +1435,19 @@ public class Nacelle {
 			// errStr += $"\nthruster '{thruster.theBlock.CustomName}': {thruster.errStr}\n";
 		}
 		// errStr += $"\n-------thrusters-------";
-		oldJetpack = jetpack;
-	}
-
-	public void diag() {
-		program.write($"- Nacelle on {rotor.CustomName}");
-		program.write($"  Thrst: {activeThrusters.Count}/{availableThrusters.Count}/{thrusters.Count} upd: {detectThrustCounter}");
-		program.write($"  Required force: {requiredThrustVec.Length():N2}N / {maxEffectiveThrust:N2}N");
-		program.write(errStr);
-	}
-
-	public void calcMaxEffectiveThrust() {
-		maxEffectiveThrust = activeThrusters.Sum(t => t.theBlock.MaxEffectiveThrust);
 	}
 
 	// This sets the rotor to face the desired direction in worldspace
-	// desiredVec must be in-line with the rotors plane of rotation
-	private double setFromVec(Vector3D desiredVec) {
+	// The current requiredThrustVec must be in-line with the rotors plane of rotation
+	double updateRotorVelocity() {
+		// Normalize the target direction vector.
+		Vector3D desiredVec = Vector3D.Normalize(requiredThrustVec);
+
 		// The thrust direction of the current nacelle/rotor, in world space.
 		Vector3D currentDir = Vector3D.TransformNormal(direction, rotor.Top.WorldMatrix);
+
 		// The rotation axis of the current nacelle/rotor, in world space.
 		Vector3D normal = rotor.WorldMatrix.Up;
-		// Normalize the target direction vector.
-		desiredVec.Normalize();
 
 		// This clever bit of math gives us the correctly signed sine of the angle between the target and current direction vectors.
 		// But only if all three vectors are normalized, and both target and current direction vectors are in the plane perpendicular to the normal vector.
@@ -1479,7 +1467,6 @@ public class Nacelle {
 		double radS = errRad / secondsPerUpdate;
 
 		// Using exactly 1 update causes all the wobble, probably because of inertia, so give it a few more updates.
-		// TODO: Can we use a PID controller here?
 		radS /= 4;
 
 		if (radS > maxRadS) {
@@ -1490,7 +1477,7 @@ public class Nacelle {
 			rotor.TargetVelocityRad = (float)radS;
 		}
 
-		// gets cos(angle between 2 vectors), no need to divide by lenghts, since both vectors are already length 1.
+		// Gets non signed cos(angle between 2 vectors), no need to divide by lenghts, since both vectors are already length 1.
 		return Vector3D.Dot(currentDir, desiredVec);
 	}
 
@@ -1610,12 +1597,6 @@ public class Thruster : BlockWrapper<IMyThrust> {
 	}
 
 	// sets the thrust in newtons (N)
-	// thrustVec is in worldspace, who'se length is the desired thrust
-	public void setThrust(Vector3D thrustVec) {
-		setThrust(thrustVec.Length());
-	}
-
-	// sets the thrust in newtons (N)
 	public void setThrust(double thrust) {
 		errStr = "";
 		/*errStr += $"\ntheBlock.Enabled: {theBlock.Enabled.toString()}";
@@ -1630,7 +1611,8 @@ public class Thruster : BlockWrapper<IMyThrust> {
 			thrust = 0;
 		}
 
-		theBlock.ThrustOverride = (float)(thrust * theBlock.MaxThrust / theBlock.MaxEffectiveThrust);
+		// Adjust for thrusters not at 100% efficiency, so we deliver the requested thrust.
+		theBlock.ThrustOverride = (float)((thrust * theBlock.MaxThrust) / theBlock.MaxEffectiveThrust);
 		/*errStr += $"\nEffective {(100*theBlock.MaxEffectiveThrust / theBlock.MaxThrust).Round(1)}%";
 		errStr += $"\nOverride {theBlock.ThrustOverride}N";*/
 	}
