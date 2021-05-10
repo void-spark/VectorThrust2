@@ -499,7 +499,7 @@ bool doStartup(string argument, UpdateType runType) {
 
 	if(justCompiled || allControllers.Count == 0 || isArg(argument, resetArg)) {
 		Echo("Initialising..");
-		getNacelles();
+		getNacelles(true);
 		List<IMyShipController> conts = new List<IMyShipController>();
 		GridTerminalSystem.GetBlocksOfType<IMyShipController>(conts);
 		if(!getControllers(conts)) {
@@ -1119,12 +1119,12 @@ IMyShipController findACockpit() {
 bool checkNacelles() {
 	Echo("Checking Nacelles..");
 
-	bool actGreedy = applyTags || removeTags;
+	bool tagCommand = applyTags || removeTags;
 
 	IMyShipController cont = findACockpit();
 	if(cont == null) {
 		Echo("No cockpit registered, checking everything.");
-	} else if(!actGreedy) {
+	} else if(!tagCommand) {
 		float shipBaseMass = cont.CalculateShipMass().BaseMass;
 		if(oldMass == shipBaseMass) {
 			Echo("Mass is the same, everything is good.");
@@ -1140,27 +1140,14 @@ bool checkNacelles() {
 		surfaces.Clear();
 	}
 
-	List<IMyShipController> conts = new List<IMyShipController>();
-	List<IMyMotorStator> rots = new List<IMyMotorStator>();
-	List<IMyThrust> thrs = new List<IMyThrust>();
-	List<IMyTextPanel> txts = new List<IMyTextPanel>();
+	var conts = new List<IMyShipController>();
+	var txts = new List<IMyTextPanel>();
 
-	List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
-	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => 
-		block is IMyShipController || 
-		block is IMyMotorStator || 
-		block is IMyThrust || 
-		block is IMyTextPanel
-	);
+	var blocks = new List<IMyTerminalBlock>();
+	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => block is IMyShipController || block is IMyTextPanel);
 	foreach(IMyTerminalBlock block in blocks) {
 		if(block is IMyShipController) {
 			conts.Add((IMyShipController)block);
-		}
-		if(block is IMyMotorStator) {
-			rots.Add((IMyMotorStator)block);
-		}
-		if(block is IMyThrust) {
-			thrs.Add((IMyThrust)block);
 		}
 		if(block is IMyTextPanel) {
 			txts.Add((IMyTextPanel)block);
@@ -1174,17 +1161,15 @@ bool checkNacelles() {
 		Me.GetSurface(0).FontSize = 2.2f;// this isn't really the right place to put this, but doing it right would be a lot more code
 	}
 
-	bool updateNacelles = false;
-
 	// if you use the following if statement, it won't lock the non-main cockpit if someone sets the main cockpit, until a recompile or world load :/
-	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */allControllers.Count != conts.Count || cont == null || actGreedy) {
+	if(/*(mainController != null ? !mainController.IsMainCockpit : false) || */allControllers.Count != conts.Count || cont == null || tagCommand) {
 		Echo($"Controller count ({allControllers.Count}) is out of whack (current: {conts.Count})");
 		if(!getControllers(conts)) {
 			return false;
 		}
 	}
 
-	if(allScreens.Count != txts.Count || actGreedy) {
+	if(allScreens.Count != txts.Count || tagCommand) {
 		Echo($"Screen count ({allScreens.Count}) is out of whack (current: {txts.Count})");
 		getScreens(txts);
 	} else {
@@ -1192,60 +1177,64 @@ bool checkNacelles() {
 		getScreens(txts);
 	}
 
-	if(rotorCount != rots.Count) {
-		Echo($"Rotor count ({rotorCount}) is out of whack (current: {rots.Count})");
-		updateNacelles = true;
-	}
-
-	var rotorHeads = new List<IMyAttachableTopBlock>();
-	foreach(IMyMotorStator rotor in rots) {
-		if(rotor.Top != null) {
-			rotorHeads.Add(rotor.Top);
-		}
-	}
-	if(rotorTopCount != rotorHeads.Count) {
-		Echo($"Rotor Head count ({rotorTopCount}) is out of whack (current: {rotorHeads.Count})");
-		Echo($"Rotors: {rots.Count}");
-		updateNacelles = true;
-	}
-
-	if(thrusterCount != thrs.Count) {
-		Echo($"Thruster count ({thrusterCount}) is out of whack (current: {thrs.Count})");
-		updateNacelles = true;
-	}
-
-
-	if(updateNacelles || actGreedy) {
-		Echo("Updating Nacelles");
-		getNacelles(rots, thrs);
-	} else {
-		Echo("They seem fine.");
-	}
+	getNacelles(false);
 
 	return true;
 }
 
-// gets all the rotors and thrusters
-void getNacelles() {
+void getNacelles(bool initialize) {
+
+	bool tagCommand = applyTags || removeTags;
+
 	var rotors = new List<IMyMotorStator>();
-	normalThrusters.Clear();
+	var thrusters = new List<IMyThrust>();
 
 	var blocks = new List<IMyTerminalBlock>();
-	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => (block is IMyThrust) || (block is IMyMotorStator));
+	GridTerminalSystem.GetBlocksOfType<IMyTerminalBlock>(blocks, block => block is IMyMotorStator || block is IMyThrust);
 	foreach(IMyTerminalBlock block in blocks) {
 		if(block is IMyThrust) {
-			normalThrusters.Add((IMyThrust)block);
+			thrusters.Add((IMyThrust)block);
 		} else {
 			rotors.Add((IMyMotorStator)block);
 		}
 	}
 	rotorCount = rotors.Count;
-	thrusterCount = normalThrusters.Count;
+	thrusterCount = thrusters.Count;
 
-	getNacelles(rotors, normalThrusters);
-}
+	if(!initialize) {
+		bool updateNacelles = false;
 
-void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
+		if(rotorCount != rotors.Count) {
+			Echo($"Rotor count ({rotorCount}) is out of whack (current: {rotors.Count})");
+			updateNacelles = true;
+		}
+
+		var rotorHeads = new List<IMyAttachableTopBlock>();
+		foreach(IMyMotorStator rotor in rotors) {
+			if(rotor.Top != null) {
+				rotorHeads.Add(rotor.Top);
+			}
+		}
+		if(rotorTopCount != rotorHeads.Count) {
+			Echo($"Rotor Head count ({rotorTopCount}) is out of whack (current: {rotorHeads.Count})");
+			Echo($"Rotors: {rotors.Count}");
+			updateNacelles = true;
+		}
+
+		if(thrusterCount != thrusters.Count) {
+			Echo($"Thruster count ({thrusterCount}) is out of whack (current: {thrusters.Count})");
+			updateNacelles = true;
+		}
+
+		if(updateNacelles || tagCommand) {
+			Echo("Updating Nacelles");
+		} else {
+			Echo("They seem fine.");
+			return;
+		}
+	}
+
+
 	bool actGreedy = greedy || applyTags || removeTags;
 	gotNacellesCount++;
 	nacelles.Clear();
@@ -1296,19 +1285,21 @@ void getNacelles(List<IMyMotorStator> rotors, List<IMyThrust> thrusters) {
 			}
 
 			nacelles[i].thrusters.Add(new Thruster(thrusters[j]));
-			thrusters.RemoveAt(j);// shorten the list we have to check
+
+			// Shorten the list we have to check, and remove from the list of normal thrusters:
+			thrusters.RemoveAt(j);
 		}
-		// remove nacelles (rotors) without thrusters
 		if(nacelles[i].thrusters.Count == 0) {
+			// remove nacelles (rotors) without thrusters
 			removeTag(nacelles[i].rotor);
 			nacelles.RemoveAt(i);// there is no more reference to the rotor, should be garbage collected
-			continue;
+		} else {
+			// if its still there, setup the nacelle
+			nacelles[i].validateThrusters(jetpack);
+			nacelles[i].detectThrustDirection();
 		}
-		// if its still there, setup the nacelle
-		nacelles[i].validateThrusters(jetpack);
-		nacelles[i].detectThrustDirection();
 	}
-
+	normalThrusters = thrusters;
 }
 
 public class Nacelle {
